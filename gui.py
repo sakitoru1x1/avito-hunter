@@ -127,9 +127,12 @@ class ParserApp:
         self.auto_button.pack(side="left", padx=2)
         self.stop_button = ttk.Button(row5, text="⏹ Стоп", command=self.stop_parsing_handler, state='disabled')
         self.stop_button.pack(side="left", padx=2)
-        self.clear_history_button = ttk.Button(row5, text="🗑 Очистить историю", command=self.clear_history)
+
+        row5b = ttk.Frame(left_frame)
+        row5b.pack(fill="x", pady=2)
+        self.clear_history_button = ttk.Button(row5b, text="🗑 Очистить историю", command=self.clear_history)
         self.clear_history_button.pack(side="left", padx=2)
-        self.save_as_profile_button = ttk.Button(row5, text="💾 Сохранить как профиль",
+        self.save_as_profile_button = ttk.Button(row5b, text="💾 Сохранить как профиль",
                                                   command=self.save_current_search_as_profile)
         self.save_as_profile_button.pack(side="left", padx=2)
 
