@@ -4,3 +4,4 @@ undetected-chromedriver>=3.5.0
 webdriver-manager>=4.0.0
 selenium-stealth>=1.0.6
 Pillow>=10.0.0
+customtkinter>=5.2.0

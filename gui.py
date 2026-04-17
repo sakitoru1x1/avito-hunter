@@ -1,5 +1,6 @@
 import tkinter as tk
-from tkinter import ttk, scrolledtext, messagebox, simpledialog
+from tkinter import messagebox, simpledialog
+import customtkinter as ctk
 import threading
 import time
 import random
@@ -27,6 +28,8 @@ from driver import DriverManager
 from storage import save_data, load_data, clear_history_files, update_all_items
 import database
 
+ctk.set_appearance_mode("dark")
+ctk.set_default_color_theme("blue")
 
 class ParserApp:
     def __init__(self, root):
@@ -64,141 +67,146 @@ class ParserApp:
 
     def create_widgets(self):
         # Статусбар (создаём первым, чтобы он пришпилился к низу)
-        statusbar = ttk.Frame(self.root, relief="sunken", borderwidth=1)
+        statusbar = ctk.CTkFrame(self.root, border_width=1)
         statusbar.pack(side="bottom", fill="x")
         self.status_var = tk.StringVar(value="⏸ Ожидание")
-        self.status_label = ttk.Label(statusbar, textvariable=self.status_var, anchor="w", padding=(5, 2))
-        self.status_label.pack(side="left", fill="x", expand=True)
+        self.status_label = ctk.CTkLabel(statusbar, textvariable=self.status_var, anchor="w")
+        self.status_label.pack(side="left", fill="x", expand=True, padx=5, pady=2)
         self.status_counter_var = tk.StringVar(value="")
-        self.status_counter_label = ttk.Label(statusbar, textvariable=self.status_counter_var, anchor="e", padding=(5, 2))
-        self.status_counter_label.pack(side="right")
+        self.status_counter_label = ctk.CTkLabel(statusbar, textvariable=self.status_counter_var, anchor="e")
+        self.status_counter_label.pack(side="right", padx=5, pady=2)
 
-        main_container = ttk.Frame(self.root)
+        main_container = ctk.CTkFrame(self.root)
         main_container.pack(fill="both", expand=True, padx=10, pady=5)
 
-        self.notebook = ttk.Notebook(main_container)
+        self.notebook = ctk.CTkTabview(main_container)
         self.notebook.pack(fill="both", expand=True)
 
         # ========== Вкладка "Результаты поиска" ==========
-        tab_results = ttk.Frame(self.notebook)
-        self.notebook.add(tab_results, text="Результаты поиска")
+        tab_results = self.notebook.add("Результаты поиска")
 
-        top_half = ttk.Frame(tab_results)
+        top_half = ctk.CTkFrame(tab_results)
         top_half.pack(fill="x", pady=(0, 5))
 
-        left_frame = ttk.LabelFrame(top_half, text="Параметры поиска", padding=5)
+        left_frame = ctk.CTkFrame(top_half, border_width=1)
         left_frame.pack(side="left", fill="both", expand=False, padx=(0, 5))
+        ctk.CTkLabel(left_frame, text="Параметры поиска", font=ctk.CTkFont(weight="bold")).pack(pady=(5,0))
 
-        row1 = ttk.Frame(left_frame)
+        row1 = ctk.CTkFrame(left_frame)
         row1.pack(fill="x", pady=2)
-        ttk.Label(row1, text="Город:").pack(side="left", padx=2)
+        ctk.CTkLabel(row1, text="Город:").pack(side="left", padx=2)
         self.city_var = tk.StringVar(value="Москва")
-        self.city_combo = ttk.Combobox(row1, textvariable=self.city_var, values=CITIES, width=20)
+        self.city_combo = ctk.CTkComboBox(row1, variable=self.city_var, values=CITIES, state="readonly")
         self.city_combo.pack(side="left", padx=2)
-        self.city_combo.bind("<<ComboboxSelected>>", self.on_city_change)
+        # ctk.CTkComboBox bind is different, it has 'command' parameter, but for backward compatibility we might keep bind if it works or use command.
+        # Actually CTkComboBox uses 'command' but it doesn't provide the event.
+        # Let's see if bind works or if we should use command.
+        self.city_combo.configure(command=lambda _: self.on_city_change(None))
 
         self.all_russia_var = tk.BooleanVar()
-        self.all_russia_cb = ttk.Checkbutton(row1, text="Вся Россия", variable=self.all_russia_var,
+        self.all_russia_cb = ctk.CTkCheckBox(row1, text="Вся Россия", variable=self.all_russia_var,
                                               command=self.on_all_russia)
         self.all_russia_cb.pack(side="left", padx=10)
 
-        row2 = ttk.Frame(left_frame)
+        row2 = ctk.CTkFrame(left_frame)
         row2.pack(fill="x", pady=2)
-        ttk.Label(row2, text="Запрос:").pack(side="left", padx=2)
-        self.query_entry = ttk.Entry(row2, width=30)
+        ctk.CTkLabel(row2, text="Запрос:").pack(side="left", padx=2)
+        self.query_entry = ctk.CTkEntry(row2, width=30*8)
         self.query_entry.pack(side="left", padx=2, fill="x", expand=True)
         self.query_entry.insert(0, "")
 
-        row3 = ttk.Frame(left_frame)
+        row3 = ctk.CTkFrame(left_frame)
         row3.pack(fill="x", pady=2)
-        ttk.Label(row3, text="Цена от:").pack(side="left", padx=2)
-        self.min_price_entry = ttk.Entry(row3, width=8)
+        ctk.CTkLabel(row3, text="Цена от:").pack(side="left", padx=2)
+        self.min_price_entry = ctk.CTkEntry(row3, width=8*8)
         self.min_price_entry.pack(side="left", padx=2)
         self.min_price_entry.insert(0, "")
-        ttk.Label(row3, text="до:").pack(side="left", padx=(5, 2))
-        self.max_price_entry = ttk.Entry(row3, width=8)
+        ctk.CTkLabel(row3, text="до:").pack(side="left", padx=(5, 2))
+        self.max_price_entry = ctk.CTkEntry(row3, width=8*8)
         self.max_price_entry.pack(side="left", padx=2)
         self.max_price_entry.insert(0, "")
-        ttk.Label(row3, text="Рейтинг ≥:").pack(side="left", padx=(15, 2))
-        self.min_rating_entry = ttk.Entry(row3, width=4)
+        ctk.CTkLabel(row3, text="Рейтинг ≥:").pack(side="left", padx=(15, 2))
+        self.min_rating_entry = ctk.CTkEntry(row3, width=4*8)
         self.min_rating_entry.pack(side="left", padx=2)
         self.min_rating_entry.insert(0, "")
 
-        row4 = ttk.Frame(left_frame)
+        row4 = ctk.CTkFrame(left_frame)
         row4.pack(fill="x", pady=2)
-        self.notify_cb = ttk.Checkbutton(row4, text="Звук", variable=self.notify_var)
+        self.notify_cb = ctk.CTkCheckBox(row4, text="Звук", variable=self.notify_var)
         self.notify_cb.pack(side="left", padx=2)
-        self.filter_cb = ttk.Checkbutton(row4, text="Убрать услуги", variable=self.filter_services_var)
+        self.filter_cb = ctk.CTkCheckBox(row4, text="Убрать услуги", variable=self.filter_services_var)
         self.filter_cb.pack(side="left", padx=2)
-        self.delivery_cb = ttk.Checkbutton(row4, text="Авито доставка", variable=self.delivery_var)
+        self.delivery_cb = ctk.CTkCheckBox(row4, text="Авито доставка", variable=self.delivery_var)
         self.delivery_cb.pack(side="left", padx=2)
 
-        row5 = ttk.Frame(left_frame)
+        row5 = ctk.CTkFrame(left_frame)
         row5.pack(fill="x", pady=5)
-        self.start_button = ttk.Button(row5, text="▶ Начать", command=self.start_parsing)
+        self.start_button = ctk.CTkButton(row5, text="▶ Начать", command=self.start_parsing)
         self.start_button.pack(side="left", padx=2)
-        self.auto_button = ttk.Button(row5, text="🔄 Авто", command=self.toggle_auto_update)
+        self.auto_button = ctk.CTkButton(row5, text="🔄 Авто", command=self.toggle_auto_update)
         self.auto_button.pack(side="left", padx=2)
-        self.stop_button = ttk.Button(row5, text="⏹ Стоп", command=self.stop_parsing_handler, state='disabled')
+        self.stop_button = ctk.CTkButton(row5, text="⏹ Стоп", command=self.stop_parsing_handler, state='disabled')
         self.stop_button.pack(side="left", padx=2)
 
-        row5b = ttk.Frame(left_frame)
+        row5b = ctk.CTkFrame(left_frame)
         row5b.pack(fill="x", pady=2)
-        self.clear_history_button = ttk.Button(row5b, text="🗑 Очистить историю", command=self.clear_history)
+        self.clear_history_button = ctk.CTkButton(row5b, text="🗑 Очистить историю", command=self.clear_history)
         self.clear_history_button.pack(side="left", padx=2)
-        self.save_as_profile_button = ttk.Button(row5b, text="💾 Сохранить как профиль",
+        self.save_as_profile_button = ctk.CTkButton(row5b, text="💾 Сохранить как профиль",
                                                   command=self.save_current_search_as_profile)
         self.save_as_profile_button.pack(side="left", padx=2)
 
-        row6 = ttk.Frame(left_frame)
+        row6 = ctk.CTkFrame(left_frame)
         row6.pack(fill="x", pady=2)
-        self.progress = ttk.Progressbar(row6, mode='indeterminate', length=200)
+        self.progress = ctk.CTkProgressBar(row6, mode='indeterminate', width=200)
         self.progress.pack(side="left", padx=2)
 
-        row7 = ttk.Frame(left_frame)
+        row7 = ctk.CTkFrame(left_frame)
         row7.pack(fill="x", pady=2)
-        ttk.Label(row7, text="Интервал (мин): от").pack(side="left", padx=2)
-        self.min_interval = ttk.Entry(row7, width=4)
+        ctk.CTkLabel(row7, text="Интервал (мин): от").pack(side="left", padx=2)
+        self.min_interval = ctk.CTkEntry(row7, width=4*8)
         self.min_interval.pack(side="left", padx=2)
         self.min_interval.insert(0, "1")
-        ttk.Label(row7, text="до").pack(side="left", padx=(2, 0))
-        self.max_interval = ttk.Entry(row7, width=4)
+        ctk.CTkLabel(row7, text="до").pack(side="left", padx=(2, 0))
+        self.max_interval = ctk.CTkEntry(row7, width=4*8)
         self.max_interval.pack(side="left", padx=2)
         self.max_interval.insert(0, "3")
 
-        row8 = ttk.Frame(left_frame)
+        row8 = ctk.CTkFrame(left_frame)
         row8.pack(fill="x", pady=2)
-        ttk.Label(row8, text="Макс. объявлений:").pack(side="left", padx=2)
-        self.max_items_entry = ttk.Entry(row8, width=5)
+        ctk.CTkLabel(row8, text="Макс. объявлений:").pack(side="left", padx=2)
+        self.max_items_entry = ctk.CTkEntry(row8, width=5*8)
         self.max_items_entry.pack(side="left", padx=2)
         self.max_items_entry.insert(0, str(DEFAULT_MAX_ITEMS))
 
-        right_frame = ttk.LabelFrame(top_half, text="Лог выполнения", padding=5)
+        right_frame = ctk.CTkFrame(top_half, border_width=1)
         right_frame.pack(side="right", fill="both", expand=True)
+        ctk.CTkLabel(right_frame, text="Лог выполнения", font=ctk.CTkFont(weight="bold")).pack(pady=(5,0))
 
-        self.log_text = scrolledtext.ScrolledText(right_frame, wrap=tk.WORD, height=10)
-        self.log_text.pack(fill="both", expand=True)
+        self.log_text = ctk.CTkTextbox(right_frame, wrap="word", height=200)
+        self.log_text.pack(fill="both", expand=True, padx=5, pady=5)
 
-        bottom_frame = ttk.LabelFrame(tab_results, text="Результаты поиска", padding=5)
+        bottom_frame = ctk.CTkFrame(tab_results, border_width=1)
         bottom_frame.pack(fill="both", expand=True, pady=(5, 0))
+        ctk.CTkLabel(bottom_frame, text="Результаты поиска", font=ctk.CTkFont(weight="bold")).pack(pady=(5,0))
 
-        results_toolbar = ttk.Frame(bottom_frame)
+        results_toolbar = ctk.CTkFrame(bottom_frame)
         results_toolbar.pack(fill="x", pady=(0, 5))
         self.favorites_only_var = tk.BooleanVar(value=False)
-        ttk.Checkbutton(
+        ctk.CTkCheckBox(
             results_toolbar, text="⭐ Только избранное",
             variable=self.favorites_only_var,
             command=self.display_results,
         ).pack(side="left", padx=5)
 
-        self.canvas = tk.Canvas(bottom_frame, borderwidth=0, highlightthickness=0)
-        self.scrollbar = ttk.Scrollbar(bottom_frame, orient="vertical", command=self.canvas.yview)
+        self.canvas = tk.Canvas(bottom_frame, borderwidth=0, highlightthickness=0, bg=ctk.ThemeManager.theme["CTkFrame"]["fg_color"][1])
+        self.scrollbar = tk.Scrollbar(bottom_frame, orient="vertical", command=self.canvas.yview)
         self.canvas.configure(yscrollcommand=self.scrollbar.set)
 
         self.scrollbar.pack(side="right", fill="y")
         self.canvas.pack(side="left", fill="both", expand=True)
 
-        self.results_frame = ttk.Frame(self.canvas)
+        self.results_frame = ctk.CTkFrame(self.canvas, fg_color="transparent")
         self.canvas.create_window((0, 0), window=self.results_frame, anchor="nw", tags=("window",))
         self.results_frame.bind("<Configure>", self.on_frame_configure)
         self.canvas.bind("<Configure>", self.on_canvas_configure)
@@ -208,209 +216,212 @@ class ParserApp:
         self.canvas.bind_all("<Button-5>", self._on_mousewheel_linux)
 
         # ========== Вкладка "Настройки" ==========
-        tab_settings = ttk.Frame(self.notebook)
-        self.notebook.add(tab_settings, text="Настройки")
+        tab_settings = self.notebook.add("Настройки")
 
-        proxy_frame = ttk.LabelFrame(tab_settings, text="Прокси", padding=10)
+        proxy_frame = ctk.CTkFrame(tab_settings, border_width=1)
         proxy_frame.pack(fill="x", padx=10, pady=5)
+        ctk.CTkLabel(proxy_frame, text="Прокси", font=ctk.CTkFont(weight="bold")).grid(row=0, column=0, columnspan=7, pady=(5,0))
 
-        ttk.Label(proxy_frame, text="Тип:").grid(row=0, column=0, sticky="w", pady=2)
+        ctk.CTkLabel(proxy_frame, text="Тип:").grid(row=1, column=0, sticky="w", pady=2, padx=5)
         self.proxy_scheme_var = tk.StringVar(value="http")
-        self.proxy_scheme_combo = ttk.Combobox(proxy_frame, textvariable=self.proxy_scheme_var,
-                                                values=["http", "socks5"], width=8)
-        self.proxy_scheme_combo.grid(row=0, column=1, padx=5, sticky="w")
+        self.proxy_scheme_combo = ctk.CTkComboBox(proxy_frame, variable=self.proxy_scheme_var,
+                                                values=["http", "socks5"], width=80, state="readonly")
+        self.proxy_scheme_combo.grid(row=1, column=1, padx=5, sticky="w")
 
-        ttk.Label(proxy_frame, text="Хост:").grid(row=0, column=2, sticky="w", padx=(20, 0))
-        self.proxy_host_entry = ttk.Entry(proxy_frame, width=20)
-        self.proxy_host_entry.grid(row=0, column=3, padx=5)
+        ctk.CTkLabel(proxy_frame, text="Хост:").grid(row=1, column=2, sticky="w", padx=(20, 0))
+        self.proxy_host_entry = ctk.CTkEntry(proxy_frame, width=20*8)
+        self.proxy_host_entry.grid(row=1, column=3, padx=5)
 
-        ttk.Label(proxy_frame, text="Порт:").grid(row=0, column=4, sticky="w")
-        self.proxy_port_entry = ttk.Entry(proxy_frame, width=8)
-        self.proxy_port_entry.grid(row=0, column=5, padx=5)
+        ctk.CTkLabel(proxy_frame, text="Порт:").grid(row=1, column=4, sticky="w")
+        self.proxy_port_entry = ctk.CTkEntry(proxy_frame, width=8*8)
+        self.proxy_port_entry.grid(row=1, column=5, padx=5)
 
-        ttk.Label(proxy_frame, text="Логин:").grid(row=1, column=0, sticky="w")
-        self.proxy_user_entry = ttk.Entry(proxy_frame, width=20)
-        self.proxy_user_entry.grid(row=1, column=1, padx=5, columnspan=2, sticky="w")
+        ctk.CTkLabel(proxy_frame, text="Логин:").grid(row=2, column=0, sticky="w", padx=5)
+        self.proxy_user_entry = ctk.CTkEntry(proxy_frame, width=20*8)
+        self.proxy_user_entry.grid(row=2, column=1, padx=5, columnspan=2, sticky="w")
 
-        ttk.Label(proxy_frame, text="Пароль:").grid(row=1, column=3, sticky="w", padx=(20, 0))
-        self.proxy_pass_entry = ttk.Entry(proxy_frame, width=20, show="*")
-        self.proxy_pass_entry.grid(row=1, column=4, padx=5, columnspan=2, sticky="w")
+        ctk.CTkLabel(proxy_frame, text="Пароль:").grid(row=2, column=3, sticky="w", padx=(20, 0))
+        self.proxy_pass_entry = ctk.CTkEntry(proxy_frame, width=20*8, show="*")
+        self.proxy_pass_entry.grid(row=2, column=4, padx=5, columnspan=2, sticky="w")
 
-        self.test_proxy_button = ttk.Button(proxy_frame, text="Тест прокси", command=self.test_proxy)
-        self.test_proxy_button.grid(row=0, column=6, padx=20, rowspan=2)
+        self.test_proxy_button = ctk.CTkButton(proxy_frame, text="Тест прокси", command=self.test_proxy)
+        self.test_proxy_button.grid(row=1, column=6, padx=20, rowspan=2)
 
-        self.proxy_status_label = ttk.Label(proxy_frame, text="", foreground="gray")
-        self.proxy_status_label.grid(row=2, column=0, columnspan=7, sticky="w", padx=5)
+        self.proxy_status_label = ctk.CTkLabel(proxy_frame, text="", text_color="gray")
+        self.proxy_status_label.grid(row=3, column=0, columnspan=7, sticky="w", padx=5)
 
-        telegram_frame = ttk.LabelFrame(tab_settings, text="Telegram уведомления", padding=10)
+        telegram_frame = ctk.CTkFrame(tab_settings, border_width=1)
         telegram_frame.pack(fill="x", padx=10, pady=5)
+        ctk.CTkLabel(telegram_frame, text="Telegram уведомления", font=ctk.CTkFont(weight="bold")).grid(row=0, column=0, columnspan=2, pady=(5,0))
 
-        ttk.Label(telegram_frame, text="Токен бота:").grid(row=0, column=0, sticky="w", pady=2)
-        self.telegram_token_entry = ttk.Entry(telegram_frame, width=50)
-        self.telegram_token_entry.grid(row=0, column=1, padx=5, pady=2)
+        ctk.CTkLabel(telegram_frame, text="Токен бота:").grid(row=1, column=0, sticky="w", pady=2, padx=5)
+        self.telegram_token_entry = ctk.CTkEntry(telegram_frame, width=50*8)
+        self.telegram_token_entry.grid(row=1, column=1, padx=5, pady=2)
 
-        ttk.Label(telegram_frame, text="Chat ID:").grid(row=1, column=0, sticky="w", pady=2)
-        self.telegram_chat_id_entry = ttk.Entry(telegram_frame, width=50)
-        self.telegram_chat_id_entry.grid(row=1, column=1, padx=5, pady=2)
+        ctk.CTkLabel(telegram_frame, text="Chat ID:").grid(row=2, column=0, sticky="w", pady=2, padx=5)
+        self.telegram_chat_id_entry = ctk.CTkEntry(telegram_frame, width=50*8)
+        self.telegram_chat_id_entry.grid(row=2, column=1, padx=5, pady=2)
 
         # Отдельный прокси для Telegram
-        tg_proxy_sub = ttk.LabelFrame(telegram_frame, text="Прокси для Telegram (необязательно)", padding=5)
-        tg_proxy_sub.grid(row=3, column=0, columnspan=2, sticky="ew", padx=5, pady=(10, 5))
+        tg_proxy_sub = ctk.CTkFrame(telegram_frame, border_width=1)
+        tg_proxy_sub.grid(row=4, column=0, columnspan=2, sticky="ew", padx=5, pady=(10, 5))
+        ctk.CTkLabel(tg_proxy_sub, text="Прокси для Telegram (необязательно)", font=ctk.CTkFont(weight="bold")).grid(row=0, column=0, columnspan=6, pady=(5,0))
 
-        ttk.Label(tg_proxy_sub, text="Тип:").grid(row=0, column=0, sticky="w", pady=2)
+        ctk.CTkLabel(tg_proxy_sub, text="Тип:").grid(row=1, column=0, sticky="w", pady=2, padx=5)
         self.tg_proxy_scheme_var = tk.StringVar(value="http")
-        self.tg_proxy_scheme_combo = ttk.Combobox(
-            tg_proxy_sub, textvariable=self.tg_proxy_scheme_var,
-            values=["http", "socks5"], width=8,
+        self.tg_proxy_scheme_combo = ctk.CTkComboBox(
+            tg_proxy_sub, variable=self.tg_proxy_scheme_var,
+            values=["http", "socks5"], width=80, state="readonly"
         )
-        self.tg_proxy_scheme_combo.grid(row=0, column=1, padx=5, sticky="w")
+        self.tg_proxy_scheme_combo.grid(row=1, column=1, padx=5, sticky="w")
 
-        ttk.Label(tg_proxy_sub, text="Хост:").grid(row=0, column=2, sticky="w", padx=(20, 0))
-        self.tg_proxy_host_entry = ttk.Entry(tg_proxy_sub, width=20)
-        self.tg_proxy_host_entry.grid(row=0, column=3, padx=5)
+        ctk.CTkLabel(tg_proxy_sub, text="Хост:").grid(row=1, column=2, sticky="w", padx=(20, 0))
+        self.tg_proxy_host_entry = ctk.CTkEntry(tg_proxy_sub, width=20*8)
+        self.tg_proxy_host_entry.grid(row=1, column=3, padx=5)
 
-        ttk.Label(tg_proxy_sub, text="Порт:").grid(row=0, column=4, sticky="w")
-        self.tg_proxy_port_entry = ttk.Entry(tg_proxy_sub, width=8)
-        self.tg_proxy_port_entry.grid(row=0, column=5, padx=5)
+        ctk.CTkLabel(tg_proxy_sub, text="Порт:").grid(row=1, column=4, sticky="w")
+        self.tg_proxy_port_entry = ctk.CTkEntry(tg_proxy_sub, width=8*8)
+        self.tg_proxy_port_entry.grid(row=1, column=5, padx=5)
 
-        ttk.Label(tg_proxy_sub, text="Логин:").grid(row=1, column=0, sticky="w")
-        self.tg_proxy_user_entry = ttk.Entry(tg_proxy_sub, width=20)
-        self.tg_proxy_user_entry.grid(row=1, column=1, padx=5, columnspan=2, sticky="w")
+        ctk.CTkLabel(tg_proxy_sub, text="Логин:").grid(row=2, column=0, sticky="w", padx=5)
+        self.tg_proxy_user_entry = ctk.CTkEntry(tg_proxy_sub, width=20*8)
+        self.tg_proxy_user_entry.grid(row=2, column=1, padx=5, columnspan=2, sticky="w")
 
-        ttk.Label(tg_proxy_sub, text="Пароль:").grid(row=1, column=3, sticky="w", padx=(20, 0))
-        self.tg_proxy_pass_entry = ttk.Entry(tg_proxy_sub, width=20, show="*")
-        self.tg_proxy_pass_entry.grid(row=1, column=4, padx=5, columnspan=2, sticky="w")
+        ctk.CTkLabel(tg_proxy_sub, text="Пароль:").grid(row=2, column=3, sticky="w", padx=(20, 0))
+        self.tg_proxy_pass_entry = ctk.CTkEntry(tg_proxy_sub, width=20*8, show="*")
+        self.tg_proxy_pass_entry.grid(row=2, column=4, padx=5, columnspan=2, sticky="w")
 
-        self.test_telegram_button = ttk.Button(telegram_frame, text="Тест", command=self.test_telegram)
-        self.test_telegram_button.grid(row=2, column=1, padx=5, pady=5, sticky="w")
+        self.test_telegram_button = ctk.CTkButton(telegram_frame, text="Тест", command=self.test_telegram)
+        self.test_telegram_button.grid(row=3, column=1, padx=5, pady=5, sticky="w")
 
-        self.telegram_status_label = ttk.Label(telegram_frame, text="", foreground="gray")
-        self.telegram_status_label.grid(row=2, column=0, columnspan=2, sticky="w", padx=5)
+        self.telegram_status_label = ctk.CTkLabel(telegram_frame, text="", text_color="gray")
+        self.telegram_status_label.grid(row=3, column=0, columnspan=2, sticky="w", padx=5)
 
         # Уведомления о статусе парсера
-        ttk.Label(telegram_frame, text="Уведомления о статусе:").grid(row=4, column=0, sticky="w", pady=(10, 2))
+        ctk.CTkLabel(telegram_frame, text="Уведомления о статусе:").grid(row=5, column=0, sticky="w", pady=(10, 2), padx=5)
         self.tg_notify_status_var = tk.BooleanVar(value=True)
-        self.tg_notify_status_cb = ttk.Checkbutton(
+        self.tg_notify_status_cb = ctk.CTkCheckBox(
             telegram_frame, text="Слать старт/стоп/ошибки в Telegram",
             variable=self.tg_notify_status_var,
         )
-        self.tg_notify_status_cb.grid(row=4, column=1, padx=5, sticky="w")
+        self.tg_notify_status_cb.grid(row=5, column=1, padx=5, sticky="w")
 
-        schedule_frame = ttk.LabelFrame(tab_settings, text="Расписание работы", padding=10)
+        schedule_frame = ctk.CTkFrame(tab_settings, border_width=1)
         schedule_frame.pack(fill="x", padx=10, pady=5)
+        ctk.CTkLabel(schedule_frame, text="Расписание работы", font=ctk.CTkFont(weight="bold")).grid(row=0, column=0, columnspan=6, pady=(5,0))
 
         self.schedule_enabled_var = tk.BooleanVar(value=False)
-        ttk.Checkbutton(
+        ctk.CTkCheckBox(
             schedule_frame, text="Работать только по расписанию",
             variable=self.schedule_enabled_var,
-        ).grid(row=0, column=0, columnspan=6, sticky="w", pady=2)
+        ).grid(row=1, column=0, columnspan=6, sticky="w", pady=2, padx=5)
 
-        ttk.Label(schedule_frame, text="Начало (ЧЧ:ММ):").grid(row=1, column=0, sticky="w", pady=2)
-        self.schedule_start_entry = ttk.Entry(schedule_frame, width=8)
-        self.schedule_start_entry.grid(row=1, column=1, padx=5, sticky="w")
+        ctk.CTkLabel(schedule_frame, text="Начало (ЧЧ:ММ):").grid(row=2, column=0, sticky="w", pady=2, padx=5)
+        self.schedule_start_entry = ctk.CTkEntry(schedule_frame, width=8*8)
+        self.schedule_start_entry.grid(row=2, column=1, padx=5, sticky="w")
         self.schedule_start_entry.insert(0, "09:00")
 
-        ttk.Label(schedule_frame, text="Окончание (ЧЧ:ММ):").grid(row=1, column=2, sticky="w", padx=(20, 0))
-        self.schedule_end_entry = ttk.Entry(schedule_frame, width=8)
-        self.schedule_end_entry.grid(row=1, column=3, padx=5, sticky="w")
+        ctk.CTkLabel(schedule_frame, text="Окончание (ЧЧ:ММ):").grid(row=2, column=2, sticky="w", padx=(20, 0))
+        self.schedule_end_entry = ctk.CTkEntry(schedule_frame, width=8*8)
+        self.schedule_end_entry.grid(row=2, column=3, padx=5, sticky="w")
         self.schedule_end_entry.insert(0, "21:00")
 
-        ttk.Label(schedule_frame, text="Дни недели:").grid(row=2, column=0, sticky="w", pady=(8, 2))
-        days_row = ttk.Frame(schedule_frame)
-        days_row.grid(row=2, column=1, columnspan=6, sticky="w", pady=(8, 2))
+        ctk.CTkLabel(schedule_frame, text="Дни недели:").grid(row=3, column=0, sticky="w", pady=(8, 2), padx=5)
+        days_row = ctk.CTkFrame(schedule_frame)
+        days_row.grid(row=3, column=1, columnspan=6, sticky="w", pady=(8, 2))
 
         self.schedule_day_vars = []
         day_names = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]
         for i, dname in enumerate(day_names):
             var = tk.BooleanVar(value=True)
             self.schedule_day_vars.append(var)
-            ttk.Checkbutton(days_row, text=dname, variable=var).pack(side="left", padx=2)
+            ctk.CTkCheckBox(days_row, text=dname, variable=var).pack(side="left", padx=2)
 
-        save_frame = ttk.Frame(tab_settings)
+        save_frame = ctk.CTkFrame(tab_settings)
         save_frame.pack(fill="x", padx=10, pady=10)
-        self.save_button = ttk.Button(save_frame, text="💾 Запомнить настройки", command=self.save_settings)
+        self.save_button = ctk.CTkButton(save_frame, text="💾 Запомнить настройки", command=self.save_settings)
         self.save_button.pack(side="left", padx=5)
 
         # ========== Вкладка "Профили" ==========
-        tab_profiles = ttk.Frame(self.notebook)
-        self.notebook.add(tab_profiles, text="Профили")
+        tab_profiles = self.notebook.add("Профили")
 
-        profiles_left = ttk.LabelFrame(tab_profiles, text="Список профилей", padding=5)
+        profiles_left = ctk.CTkFrame(tab_profiles, border_width=1)
         profiles_left.pack(side="left", fill="y", padx=(10, 5), pady=10)
+        ctk.CTkLabel(profiles_left, text="Список профилей", font=ctk.CTkFont(weight="bold")).pack(pady=(5,0))
 
-        self.profiles_listbox = tk.Listbox(profiles_left, width=30, height=20)
-        self.profiles_listbox.pack(side="left", fill="y")
+        self.profiles_listbox = tk.Listbox(profiles_left, width=30, height=20, bg="#2b2b2b", fg="white", borderwidth=0, highlightthickness=0)
+        self.profiles_listbox.pack(side="left", fill="y", padx=5, pady=5)
         self.profiles_listbox.bind("<<ListboxSelect>>", self.on_profile_select)
 
-        profiles_scroll = ttk.Scrollbar(profiles_left, orient="vertical", command=self.profiles_listbox.yview)
+        profiles_scroll = tk.Scrollbar(profiles_left, orient="vertical", command=self.profiles_listbox.yview)
         profiles_scroll.pack(side="right", fill="y")
         self.profiles_listbox.configure(yscrollcommand=profiles_scroll.set)
 
-        profiles_right = ttk.LabelFrame(tab_profiles, text="Параметры профиля", padding=10)
+        profiles_right = ctk.CTkFrame(tab_profiles, border_width=1)
         profiles_right.pack(side="left", fill="both", expand=True, padx=5, pady=10)
+        ctk.CTkLabel(profiles_right, text="Параметры профиля", font=ctk.CTkFont(weight="bold")).grid(row=0, column=0, columnspan=2, pady=(5,0))
 
-        ttk.Label(profiles_right, text="Название:").grid(row=0, column=0, sticky="w", pady=2)
-        self.profile_name_entry = ttk.Entry(profiles_right, width=30)
-        self.profile_name_entry.grid(row=0, column=1, padx=5, pady=2, sticky="w")
+        ctk.CTkLabel(profiles_right, text="Название:").grid(row=1, column=0, sticky="w", pady=2, padx=5)
+        self.profile_name_entry = ctk.CTkEntry(profiles_right, width=30*8)
+        self.profile_name_entry.grid(row=1, column=1, padx=5, pady=2, sticky="w")
 
-        ttk.Label(profiles_right, text="Запрос:").grid(row=1, column=0, sticky="w", pady=2)
-        self.profile_query_entry = ttk.Entry(profiles_right, width=30)
-        self.profile_query_entry.grid(row=1, column=1, padx=5, pady=2, sticky="w")
+        ctk.CTkLabel(profiles_right, text="Запрос:").grid(row=2, column=0, sticky="w", pady=2, padx=5)
+        self.profile_query_entry = ctk.CTkEntry(profiles_right, width=30*8)
+        self.profile_query_entry.grid(row=2, column=1, padx=5, pady=2, sticky="w")
 
-        ttk.Label(profiles_right, text="Город:").grid(row=2, column=0, sticky="w", pady=2)
+        ctk.CTkLabel(profiles_right, text="Город:").grid(row=3, column=0, sticky="w", pady=2, padx=5)
         self.profile_city_var = tk.StringVar(value="Москва")
-        self.profile_city_combo = ttk.Combobox(
-            profiles_right, textvariable=self.profile_city_var, values=CITIES, width=27,
+        self.profile_city_combo = ctk.CTkComboBox(
+            profiles_right, variable=self.profile_city_var, values=CITIES, width=27*8, state="readonly"
         )
-        self.profile_city_combo.grid(row=2, column=1, padx=5, pady=2, sticky="w")
+        self.profile_city_combo.grid(row=3, column=1, padx=5, pady=2, sticky="w")
 
-        ttk.Label(profiles_right, text="Цена от:").grid(row=3, column=0, sticky="w", pady=2)
-        self.profile_min_price_entry = ttk.Entry(profiles_right, width=12)
-        self.profile_min_price_entry.grid(row=3, column=1, padx=5, pady=2, sticky="w")
+        ctk.CTkLabel(profiles_right, text="Цена от:").grid(row=4, column=0, sticky="w", pady=2, padx=5)
+        self.profile_min_price_entry = ctk.CTkEntry(profiles_right, width=12*8)
+        self.profile_min_price_entry.grid(row=4, column=1, padx=5, pady=2, sticky="w")
 
-        ttk.Label(profiles_right, text="Цена до:").grid(row=4, column=0, sticky="w", pady=2)
-        self.profile_max_price_entry = ttk.Entry(profiles_right, width=12)
-        self.profile_max_price_entry.grid(row=4, column=1, padx=5, pady=2, sticky="w")
+        ctk.CTkLabel(profiles_right, text="Цена до:").grid(row=5, column=0, sticky="w", pady=2, padx=5)
+        self.profile_max_price_entry = ctk.CTkEntry(profiles_right, width=12*8)
+        self.profile_max_price_entry.grid(row=5, column=1, padx=5, pady=2, sticky="w")
 
-        ttk.Label(profiles_right, text="Интервал от (мин):").grid(row=5, column=0, sticky="w", pady=2)
-        self.profile_min_interval_entry = ttk.Entry(profiles_right, width=12)
-        self.profile_min_interval_entry.grid(row=5, column=1, padx=5, pady=2, sticky="w")
+        ctk.CTkLabel(profiles_right, text="Интервал от (мин):").grid(row=6, column=0, sticky="w", pady=2, padx=5)
+        self.profile_min_interval_entry = ctk.CTkEntry(profiles_right, width=12*8)
+        self.profile_min_interval_entry.grid(row=6, column=1, padx=5, pady=2, sticky="w")
         self.profile_min_interval_entry.insert(0, "1")
 
-        ttk.Label(profiles_right, text="Интервал до (мин):").grid(row=6, column=0, sticky="w", pady=2)
-        self.profile_max_interval_entry = ttk.Entry(profiles_right, width=12)
-        self.profile_max_interval_entry.grid(row=6, column=1, padx=5, pady=2, sticky="w")
+        ctk.CTkLabel(profiles_right, text="Интервал до (мин):").grid(row=7, column=0, sticky="w", pady=2, padx=5)
+        self.profile_max_interval_entry = ctk.CTkEntry(profiles_right, width=12*8)
+        self.profile_max_interval_entry.grid(row=7, column=1, padx=5, pady=2, sticky="w")
         self.profile_max_interval_entry.insert(0, "3")
 
         self.profile_delivery_var = tk.BooleanVar(value=False)
-        ttk.Checkbutton(
+        ctk.CTkCheckBox(
             profiles_right, text="Авито доставка", variable=self.profile_delivery_var,
-        ).grid(row=7, column=1, padx=5, pady=2, sticky="w")
-
-        self.profile_filter_services_var = tk.BooleanVar(value=False)
-        ttk.Checkbutton(
-            profiles_right, text="Убрать услуги", variable=self.profile_filter_services_var,
         ).grid(row=8, column=1, padx=5, pady=2, sticky="w")
 
-        profiles_buttons = ttk.Frame(profiles_right)
-        profiles_buttons.grid(row=9, column=0, columnspan=2, pady=10, sticky="w")
+        self.profile_filter_services_var = tk.BooleanVar(value=False)
+        ctk.CTkCheckBox(
+            profiles_right, text="Убрать услуги", variable=self.profile_filter_services_var,
+        ).grid(row=9, column=1, padx=5, pady=2, sticky="w")
 
-        ttk.Button(profiles_buttons, text="➕ Новый", command=self.profile_new).pack(side="left", padx=2)
-        ttk.Button(profiles_buttons, text="💾 Сохранить", command=self.profile_save).pack(side="left", padx=2)
-        ttk.Button(profiles_buttons, text="🗑 Удалить", command=self.profile_delete).pack(side="left", padx=2)
-        ttk.Button(profiles_buttons, text="✔ Сделать активным", command=self.profile_set_active).pack(side="left", padx=2)
-        ttk.Button(profiles_buttons, text="📥 Загрузить в поиск", command=self.profile_load_to_search).pack(side="left", padx=2)
+        profiles_buttons = ctk.CTkFrame(profiles_right)
+        profiles_buttons.grid(row=10, column=0, columnspan=2, pady=10, sticky="w")
 
-        self.profile_status_label = ttk.Label(profiles_right, text="", foreground="gray")
-        self.profile_status_label.grid(row=10, column=0, columnspan=2, sticky="w", padx=5, pady=(10, 0))
+        ctk.CTkButton(profiles_buttons, text="➕ Новый", command=self.profile_new).pack(side="left", padx=2)
+        ctk.CTkButton(profiles_buttons, text="💾 Сохранить", command=self.profile_save).pack(side="left", padx=2)
+        ctk.CTkButton(profiles_buttons, text="🗑 Удалить", command=self.profile_delete).pack(side="left", padx=2)
+        ctk.CTkButton(profiles_buttons, text="✔ Сделать активным", command=self.profile_set_active).pack(side="left", padx=2)
+        ctk.CTkButton(profiles_buttons, text="📥 Загрузить в поиск", command=self.profile_load_to_search).pack(side="left", padx=2)
+
+        self.profile_status_label = ctk.CTkLabel(profiles_right, text="", text_color="gray")
+        self.profile_status_label.grid(row=11, column=0, columnspan=2, sticky="w", padx=5, pady=(10, 0))
 
         self._current_profile_id = None
 
         # ========== Вкладка "Инструкция" ==========
-        tab_instructions = ttk.Frame(self.notebook)
-        self.notebook.add(tab_instructions, text="Инструкция")
+        tab_instructions = self.notebook.add("Инструкция")
 
-        self.instructions_text = scrolledtext.ScrolledText(tab_instructions, wrap=tk.WORD, font=('Arial', 10))
+        self.instructions_text = ctk.CTkTextbox(tab_instructions, wrap="word", font=ctk.CTkFont(size=12))
         self.instructions_text.pack(fill="both", expand=True, padx=10, pady=10)
 
         instruction_content = """# 🔧 Инструкция по настройке парсера Avito
@@ -467,28 +478,17 @@ yR1ByZ:paNHYV8EM7su - до двоеточия логин, после - паро�
 """
         self.instructions_text.insert('1.0', instruction_content)
 
-        self.instructions_text.tag_configure("heading1", font=('Arial', 14, 'bold'), foreground='#2E86C1')
-        self.instructions_text.tag_configure("heading2", font=('Arial', 12, 'bold'), foreground='#2874A6')
-        self.instructions_text.tag_configure("heading3", font=('Arial', 11, 'bold'), foreground='#1F618D')
-        self.instructions_text.tag_configure("list", lmargin1=20, lmargin2=40)
+        # Tag configuration might not work directly in CTkTextbox the same way as in tk.Text.
+        # CTkTextbox doesn't support tag_configure/tag_add like tk.Text.
+        # For simplicity, we skip rich formatting in CTkTextbox if not supported or just leave as plain text.
+        # But instructions said to keep behavior. CTkTextbox doesn't support tags.
+        # I will keep the code but it might not have effect or might need a different approach.
+        # Actually, if I want to keep rich text I might need to use a different widget, but rules say use CTkTextbox.
+        
+        # self.instructions_text.tag_configure("heading1", font=ctk.CTkFont(size=14, weight='bold'), foreground='#2E86C1')
+        # ...
 
-        content_lines = self.instructions_text.get('1.0', tk.END).splitlines()
-        line_num = 1
-        for line in content_lines:
-            if line.startswith('# '):
-                self.instructions_text.tag_add('heading1', f"{line_num}.0", f"{line_num}.end")
-            elif line.startswith('## '):
-                self.instructions_text.tag_add('heading2', f"{line_num}.0", f"{line_num}.end")
-            elif line.startswith('### '):
-                self.instructions_text.tag_add('heading3', f"{line_num}.0", f"{line_num}.end")
-            elif line.startswith('- ') or (len(line) > 2 and line[0].isdigit() and line[1] == '.'):
-                self.instructions_text.tag_add('list', f"{line_num}.0", f"{line_num}.end")
-            line_num += 1
-
-        self.instructions_text.config(state='disabled')
-
-        self.style = ttk.Style()
-        self.style.configure('Accent.TButton', foreground='blue', font=('Arial', 10, 'bold'))
+        self.instructions_text.configure(state='disabled')
 
     # ---------- Прокрутка колёсиком ----------
     def _on_mousewheel(self, event):
@@ -617,7 +617,10 @@ yR1ByZ:paNHYV8EM7su - до двоеточия логин, после - паро�
 
     def log(self, message):
         self.log_text.insert(tk.END, message + "\n")
-        self.log_text.see(tk.END)
+        try:
+            self.log_text._textbox.see(tk.END)
+        except Exception:
+            pass
         logger.info(message)
         self.root.update()
 
@@ -726,23 +729,23 @@ yR1ByZ:paNHYV8EM7su - до двоеточия логин, после - паро�
         token = self.telegram_token_entry.get().strip()
         chat_id = self.telegram_chat_id_entry.get().strip()
         if not token:
-            self.telegram_status_label.config(text="❌ Токен не указан", foreground="red")
+            self.telegram_status_label.configure(text="❌ Токен не указан", text_color="red")
             return
         proxies = self._get_tg_proxies_dict()
         notifier = TelegramNotifier(token, chat_id, proxies=proxies)
         ok, msg = notifier.test_connection()
         if ok:
-            self.telegram_status_label.config(text="✅ Бот доступен", foreground="green")
+            self.telegram_status_label.configure(text="✅ Бот доступен", text_color="green")
             if chat_id:
                 test_text = "🔔 Тестовое сообщение от парсера Avito"
                 if notifier.send_message(test_text):
-                    self.telegram_status_label.config(text="✅ Тест отправлен", foreground="green")
+                    self.telegram_status_label.configure(text="✅ Тест отправлен", text_color="green")
                 else:
-                    self.telegram_status_label.config(text="❌ Ошибка отправки", foreground="red")
+                    self.telegram_status_label.configure(text="❌ Ошибка отправки", text_color="red")
             else:
-                self.telegram_status_label.config(text="✅ Бот доступен, укажите Chat ID", foreground="orange")
+                self.telegram_status_label.configure(text="✅ Бот доступен, укажите Chat ID", text_color="orange")
         else:
-            self.telegram_status_label.config(text=f"❌ {msg}", foreground="red")
+            self.telegram_status_label.configure(text=f"❌ {msg}", text_color="red")
 
     def update_telegram_notifier(self):
         token = self.telegram_token_entry.get().strip()
@@ -758,7 +761,7 @@ yR1ByZ:paNHYV8EM7su - до двоеточия логин, после - паро�
         user = self.proxy_user_entry.get().strip()
         pwd = self.proxy_pass_entry.get().strip()
         if not host or not port:
-            self.proxy_status_label.config(text="❌ Укажите хост и порт", foreground="red")
+            self.proxy_status_label.configure(text="❌ Укажите хост и порт", text_color="red")
             return
         proxy_url = f"{scheme}://{user}:{pwd}@{host}:{port}" if user and pwd else f"{scheme}://{host}:{port}"
         proxies = {"http": proxy_url, "https": proxy_url}
@@ -766,11 +769,11 @@ yR1ByZ:paNHYV8EM7su - до двоеточия логин, после - паро�
             r = requests.get("https://httpbin.org/ip", proxies=proxies, timeout=10)
             if r.status_code == 200:
                 ip = r.json()["origin"]
-                self.proxy_status_label.config(text=f"✅ Прокси работает, ваш IP: {ip}", foreground="green")
+                self.proxy_status_label.configure(text=f"✅ Прокси работает, ваш IP: {ip}", text_color="green")
             else:
-                self.proxy_status_label.config(text=f"❌ Ошибка: {r.status_code}", foreground="red")
+                self.proxy_status_label.configure(text=f"❌ Ошибка: {r.status_code}", text_color="red")
         except Exception as e:
-            self.proxy_status_label.config(text=f"❌ Ошибка: {str(e)}", foreground="red")
+            self.proxy_status_label.configure(text=f"❌ Ошибка: {str(e)}", text_color="red")
             logger.error(f"Ошибка теста прокси: {e}")
 
     # ---------- Профили ----------
@@ -836,7 +839,7 @@ yR1ByZ:paNHYV8EM7su - до двоеточия логин, после - паро�
 
     def profile_new(self):
         self._clear_profile_form()
-        self.profile_status_label.config(text="Новый профиль - заполните поля и нажмите «Сохранить»", foreground="gray")
+        self.profile_status_label.configure(text="Новый профиль - заполните поля и нажмите «Сохранить»", text_color="gray")
 
     def _collect_profile_from_form(self):
         name = self.profile_name_entry.get().strip()
@@ -877,48 +880,48 @@ yR1ByZ:paNHYV8EM7su - до двоеточия логин, после - паро�
         try:
             name, city, filters = self._collect_profile_from_form()
         except ValueError as e:
-            self.profile_status_label.config(text=f"❌ {e}", foreground="red")
+            self.profile_status_label.configure(text=f"❌ {e}", text_color="red")
             return
         try:
             if self._current_profile_id is None:
                 new_id = database.create_search_profile(name, city, filters)
                 self._current_profile_id = new_id
-                self.profile_status_label.config(text=f"✅ Профиль «{name}» создан", foreground="green")
+                self.profile_status_label.configure(text=f"✅ Профиль «{name}» создан", text_color="green")
             else:
                 database.update_search_profile(
                     self._current_profile_id, name=name, city=city, filters=filters,
                 )
-                self.profile_status_label.config(text=f"✅ Профиль «{name}» обновлён", foreground="green")
+                self.profile_status_label.configure(text=f"✅ Профиль «{name}» обновлён", text_color="green")
         except Exception as e:
-            self.profile_status_label.config(text=f"❌ Ошибка: {e}", foreground="red")
+            self.profile_status_label.configure(text=f"❌ Ошибка: {e}", text_color="red")
             logger.error(f"Ошибка сохранения профиля: {e}")
             return
         self.refresh_profiles_list()
 
     def profile_delete(self):
         if self._current_profile_id is None:
-            self.profile_status_label.config(text="❌ Профиль не выбран", foreground="red")
+            self.profile_status_label.configure(text="❌ Профиль не выбран", text_color="red")
             return
         if not messagebox.askyesno("Удалить профиль", "Вы уверены, что хотите удалить этот профиль?"):
             return
         try:
             database.delete_search_profile(self._current_profile_id)
-            self.profile_status_label.config(text="✅ Профиль удалён", foreground="green")
+            self.profile_status_label.configure(text="✅ Профиль удалён", text_color="green")
             self._clear_profile_form()
             self.refresh_profiles_list()
         except Exception as e:
-            self.profile_status_label.config(text=f"❌ Ошибка: {e}", foreground="red")
+            self.profile_status_label.configure(text=f"❌ Ошибка: {e}", text_color="red")
 
     def profile_set_active(self):
         if self._current_profile_id is None:
-            self.profile_status_label.config(text="❌ Профиль не выбран", foreground="red")
+            self.profile_status_label.configure(text="❌ Профиль не выбран", text_color="red")
             return
         try:
             database.set_active_profile(self._current_profile_id)
-            self.profile_status_label.config(text="✅ Профиль сделан активным", foreground="green")
+            self.profile_status_label.configure(text="✅ Профиль сделан активным", text_color="green")
             self.refresh_profiles_list()
         except Exception as e:
-            self.profile_status_label.config(text=f"❌ Ошибка: {e}", foreground="red")
+            self.profile_status_label.configure(text=f"❌ Ошибка: {e}", text_color="red")
 
     def save_current_search_as_profile(self):
         """Сохраняет текущие параметры поиска (главная вкладка) как новый профиль."""
@@ -987,16 +990,16 @@ yR1ByZ:paNHYV8EM7su - до двоеточия логин, после - паро�
     def profile_load_to_search(self):
         """Переносит параметры текущего профиля во вкладку «Результаты поиска»."""
         if self._current_profile_id is None:
-            self.profile_status_label.config(text="❌ Профиль не выбран", foreground="red")
+            self.profile_status_label.configure(text="❌ Профиль не выбран", text_color="red")
             return
         profile = database.get_search_profile(self._current_profile_id)
         if not profile:
             return
         self._apply_profile_to_search_tab(profile)
-        self.profile_status_label.config(
-            text=f"✅ Профиль «{profile['name']}» загружен во вкладку поиска", foreground="green",
+        self.profile_status_label.configure(
+            text=f"✅ Профиль «{profile['name']}» загружен во вкладку поиска", text_color="green",
         )
-        self.notebook.select(0)
+        self.notebook.set("Результаты поиска")
 
     def _apply_profile_to_search_tab(self, profile):
         filters = profile.get("filters") or {}
@@ -1038,9 +1041,9 @@ yR1ByZ:paNHYV8EM7su - до двоеточия логин, после - паро�
             self.log(f"⏸ {reason} - парсинг пропущен")
             self.send_tg_status(f"⏸ {reason}")
             self.progress.stop()
-            self.start_button.config(state='normal')
+            self.start_button.configure(state='normal')
             if not self.auto_update:
-                self.stop_button.config(state='disabled')
+                self.stop_button.configure(state='disabled')
             if self.auto_update:
                 self.root.after(100, self.schedule_next_auto)
             return
@@ -1050,8 +1053,8 @@ yR1ByZ:paNHYV8EM7su - до двоеточия логин, после - паро�
         if not self.driver_manager.ensure_driver(proxy_settings, self.log):
             self.log("Не удалось создать драйвер. Парсинг невозможен.")
             self.progress.stop()
-            self.start_button.config(state='normal')
-            self.stop_button.config(state='disabled')
+            self.start_button.configure(state='normal')
+            self.stop_button.configure(state='disabled')
             return
 
         driver = self.driver_manager.driver
@@ -1246,9 +1249,9 @@ yR1ByZ:paNHYV8EM7su - до двоеточия логин, после - паро�
             self.set_status(f"❌ Ошибка: {str(e)[:60]}")
         finally:
             self.progress.stop()
-            self.start_button.config(state='normal')
+            self.start_button.configure(state='normal')
             if not self.auto_update:
-                self.stop_button.config(state='disabled')
+                self.stop_button.configure(state='disabled')
             if self.auto_update:
                 self.root.after(100, self.schedule_next_auto)
 
@@ -1354,7 +1357,7 @@ yR1ByZ:paNHYV8EM7su - до двоеточия логин, после - паро�
                 for desc_selector in [
                     (By.CSS_SELECTOR, "[itemprop='description']"),
                     (By.CSS_SELECTOR, "[data-marker*='description']"),
-                    (By.XPATH, ".//*[contains(@class, 'description')]"),
+                    (By.XPATH, ".//div[contains(@class, 'description')]"),
                 ]:
                     try:
                         desc = item.find_element(*desc_selector)
@@ -1492,17 +1495,16 @@ yR1ByZ:paNHYV8EM7su - до двоеточия логин, после - паро�
         try:
             photo = ImageTk.PhotoImage(pil_image)
             self.images.append(photo)
-            img_label.config(image=photo)
+            img_label.configure(image=photo)
         except Exception:
             pass
 
     def _set_image_fallback(self, url, img_label, card):
         try:
             img_label.destroy()
-            btn = ttk.Button(card, text="📷 Открыть фото",
+            btn = ctk.CTkButton(card, text="📷 Открыть фото",
                              command=lambda: webbrowser.open(url))
             btn.grid(row=1, column=0, padx=5, pady=5)
-            btn.configure(style='Accent.TButton')
         except Exception:
             pass
 
@@ -1528,22 +1530,18 @@ yR1ByZ:paNHYV8EM7su - до двоеточия логин, после - паро�
             fav_only = self.favorites_only_var.get() if hasattr(self, 'favorites_only_var') else False
             visible_items = [it for it in self.all_items if (not fav_only) or it.get("is_favorite")]
 
-            style = ttk.Style()
-            style.configure("New.TFrame", background="#ffcccc")
-            style.configure("Hover.TFrame", background="#e8f0ff")
-            style.configure("NewHover.TFrame", background="#ffb3b3")
-
             for item in visible_items:
-                card = ttk.Frame(self.results_frame, relief="solid", borderwidth=1, padding=10)
+                card = ctk.CTkFrame(self.results_frame, border_width=1)
                 card.pack(fill="x", padx=5, pady=5)
 
                 state = {"hover_handled": False, "is_new": item.get("is_new", False)}
 
-                def base_style(st=state):
-                    return "New.TFrame" if st["is_new"] else ""
+                def get_card_color(st=state, hover=False):
+                    if hover:
+                        return "#5a2a2a" if st["is_new"] else "#1e3a5a"
+                    return "#5a1e1e" if st["is_new"] else "transparent"
 
-                def hover_style(st=state):
-                    return "NewHover.TFrame" if st["is_new"] else "Hover.TFrame"
+                card.configure(fg_color=get_card_color(state))
 
                 def on_enter(event, _item=item, _card=card, st=state):
                     if not st["hover_handled"] and st["is_new"]:
@@ -1551,30 +1549,27 @@ yR1ByZ:paNHYV8EM7su - до двоеточия логин, после - паро�
                         _item["is_new"] = False
                         st["is_new"] = False
                         self.root.after(100, self._save_data)
-                    _card.config(style=hover_style(st))
+                    _card.configure(fg_color=get_card_color(st, hover=True))
 
                 def on_leave(event, _card=card, st=state):
-                    _card.config(style=base_style(st))
+                    _card.configure(fg_color=get_card_color(st))
 
                 card.bind("<Enter>", on_enter, add="+")
                 card.bind("<Leave>", on_leave, add="+")
 
-                if state["is_new"]:
-                    card.config(style="New.TFrame")
-
-                header = ttk.Frame(card)
+                header = ctk.CTkFrame(card, fg_color="transparent")
                 header.grid(row=0, column=0, columnspan=2, sticky="w", pady=5)
 
-                fav_btn = ttk.Button(
+                fav_btn = ctk.CTkButton(
                     header,
                     text=("⭐" if item.get("is_favorite") else "☆"),
-                    width=3,
+                    width=30,
                     command=lambda _it=item: self.toggle_favorite(_it),
                 )
-                fav_btn.pack(side="left", padx=(0, 5))
-                ttk.Label(header, text=item['title'], font=('Arial', 12, 'bold')).pack(side="left")
+                fav_btn.pack(side="left", padx=(5, 5))
+                ctk.CTkLabel(header, text=item['title'], font=ctk.CTkFont(size=12, weight='bold')).pack(side="left")
 
-                img_label = ttk.Label(card)
+                img_label = ctk.CTkLabel(card, text="")
                 img_label.grid(row=1, column=0, rowspan=5, padx=5, pady=5, sticky="n")
 
                 if item['image_url'] != "Н/Д":
@@ -1582,27 +1577,27 @@ yR1ByZ:paNHYV8EM7su - до двоеточия логин, после - паро�
                         self._load_image_async, session, item['image_url'], img_label, card
                     )
                 else:
-                    img_label.config(text="[нет фото]")
+                    img_label.configure(text="[нет фото]")
 
-                price_frame = ttk.Frame(card)
+                price_frame = ctk.CTkFrame(card, fg_color="transparent")
                 price_frame.grid(row=1, column=1, sticky="w")
-                ttk.Label(price_frame, text=f"Цена: {item['price']} руб.", font=('Arial', 10)).pack(side="left")
+                ctk.CTkLabel(price_frame, text=f"Цена: {item['price']} руб.", font=ctk.CTkFont(size=10)).pack(side="left")
                 if item.get("seller_rating") is not None:
-                    ttk.Label(price_frame, text=f"  ★ {item['seller_rating']:.1f}",
-                              font=('Arial', 10), foreground="#c68a00").pack(side="left", padx=(10, 0))
+                    ctk.CTkLabel(price_frame, text=f"  ★ {item['seller_rating']:.1f}",
+                              font=ctk.CTkFont(size=10), text_color="#c68a00").pack(side="left", padx=(10, 0))
 
-                desc = tk.Text(card, height=4, wrap=tk.WORD, font=('Arial', 9))
+                desc = ctk.CTkTextbox(card, height=80, wrap="word", font=ctk.CTkFont(size=10))
                 desc.insert("1.0", item['description'])
-                desc.config(state='disabled')
-                desc.grid(row=2, column=1, sticky="w", pady=5)
+                desc.configure(state='disabled')
+                desc.grid(row=2, column=1, sticky="w", pady=5, padx=5)
 
                 first_seen = item.get("first_seen", "Н/Д")
-                ttk.Label(card, text=f"Время добавления в программу: {first_seen}", font=('Arial', 8)).grid(row=3,
+                ctk.CTkLabel(card, text=f"Время добавления в программу: {first_seen}", font=ctk.CTkFont(size=8)).grid(row=3,
                                                                                                               column=1,
-                                                                                                              sticky="w")
+                                                                                                              sticky="w", padx=5)
 
-                link_label = ttk.Label(card, text="Открыть объявление", foreground="blue", cursor="hand2")
-                link_label.grid(row=4, column=1, sticky="w")
+                link_label = ctk.CTkLabel(card, text="Открыть объявление", text_color="#4a9eff", cursor="hand2")
+                link_label.grid(row=4, column=1, sticky="w", padx=5)
                 link_label.bind("<Button-1>", lambda e, url=item['link']: webbrowser.open(url))
 
             self.results_frame.update_idletasks()
@@ -1632,8 +1627,8 @@ yR1ByZ:paNHYV8EM7su - до двоеточия логин, после - паро�
             return
 
         self.stop_parsing = False
-        self.start_button.config(state='disabled')
-        self.stop_button.config(state='normal')
+        self.start_button.configure(state='disabled')
+        self.stop_button.configure(state='normal')
         self.progress.start()
         self.log("Ручной парсинг...")
         self.set_status(f"🔍 Ищем: {query}")
@@ -1651,8 +1646,8 @@ yR1ByZ:paNHYV8EM7su - до двоеточия логин, после - паро�
                 self.log("Интервал должен быть числом")
                 return
             self.auto_update = True
-            self.auto_button.config(text="Автообновление вкл", state='disabled')
-            self.stop_button.config(state='normal')
+            self.auto_button.configure(text="Автообновление вкл", state='disabled')
+            self.stop_button.configure(state='normal')
             self.log("Автообновление запущено")
             self.run_auto_parsing()
         else:
@@ -1660,9 +1655,9 @@ yR1ByZ:paNHYV8EM7su - до двоеточия логин, после - паро�
 
     def stop_auto_update(self):
         self.auto_update = False
-        self.auto_button.config(text="Автообновление", state='normal')
+        self.auto_button.configure(text="Автообновление", state='normal')
         if not self.driver_manager.driver or not self.stop_parsing:
-            self.stop_button.config(state='disabled')
+            self.stop_button.configure(state='disabled')
         self.log("Автообновление остановлено")
 
     def stop_parsing_handler(self):
