@@ -119,6 +119,10 @@ class ParserApp:
         self.max_price_entry = ttk.Entry(row3, width=8)
         self.max_price_entry.pack(side="left", padx=2)
         self.max_price_entry.insert(0, "")
+        ttk.Label(row3, text="Рейтинг ≥:").pack(side="left", padx=(15, 2))
+        self.min_rating_entry = ttk.Entry(row3, width=4)
+        self.min_rating_entry.pack(side="left", padx=2)
+        self.min_rating_entry.insert(0, "")
 
         row4 = ttk.Frame(left_frame)
         row4.pack(fill="x", pady=2)
@@ -616,6 +620,45 @@ yR1ByZ:paNHYV8EM7su - до двоеточия логин, после - паро�
         self.log_text.see(tk.END)
         logger.info(message)
         self.root.update()
+
+    def _extract_seller_rating(self, item):
+        """Пытается вытащить рейтинг продавца с карточки объявления. Возвращает float или None."""
+        selectors = [
+            (By.CSS_SELECTOR, "[data-marker='seller-info/rating-score']"),
+            (By.CSS_SELECTOR, "[data-marker='seller-rating/score']"),
+            (By.XPATH, ".//span[contains(@class,'rating')]"),
+            (By.XPATH, ".//*[starts-with(@aria-label,'Рейтинг')]"),
+        ]
+        for by, sel in selectors:
+            try:
+                elem = item.find_element(by, sel)
+                text = (elem.text or elem.get_attribute("aria-label") or "").strip()
+                if not text:
+                    continue
+                text = text.replace(",", ".")
+                for token in text.split():
+                    try:
+                        val = float(token)
+                        if 0 <= val <= 5:
+                            return val
+                    except ValueError:
+                        continue
+            except (NoSuchElementException, Exception):
+                continue
+        return None
+
+    def _get_min_rating_filter(self):
+        """Читает минимальный рейтинг из поля фильтра. None = фильтр не активен."""
+        try:
+            txt = self.min_rating_entry.get().strip().replace(",", ".")
+            if not txt:
+                return None
+            val = float(txt)
+            if 0 <= val <= 5:
+                return val
+        except (ValueError, AttributeError):
+            pass
+        return None
 
     def toggle_favorite(self, item):
         """Переключает отметку 'избранное' у объявления."""
@@ -1342,6 +1385,13 @@ yR1ByZ:paNHYV8EM7su - до двоеточия логин, после - паро�
                     self.log("⛔ Не удалось получить ID - пропущено")
                     continue
 
+                seller_rating = self._extract_seller_rating(item)
+
+                min_rating = self._get_min_rating_filter()
+                if min_rating is not None and seller_rating is not None and seller_rating < min_rating:
+                    self.log(f"⛔ Рейтинг {seller_rating} < {min_rating} - пропущено")
+                    continue
+
                 result.append({
                     "id": item_id,
                     "title": title,
@@ -1352,6 +1402,7 @@ yR1ByZ:paNHYV8EM7su - до двоеточия логин, после - паро�
                     "date": date_str,
                     "pub_date_timestamp": timestamp,
                     "search_query": self.query_entry.get().strip(),
+                    "seller_rating": seller_rating,
                     "is_new": False,
                     "first_seen": None
                 })
@@ -1520,8 +1571,12 @@ yR1ByZ:paNHYV8EM7su - до двоеточия логин, после - паро�
                 else:
                     img_label.config(text="[нет фото]")
 
-                ttk.Label(card, text=f"Цена: {item['price']} руб.", font=('Arial', 10)).grid(row=1, column=1,
-                                                                                              sticky="w")
+                price_frame = ttk.Frame(card)
+                price_frame.grid(row=1, column=1, sticky="w")
+                ttk.Label(price_frame, text=f"Цена: {item['price']} руб.", font=('Arial', 10)).pack(side="left")
+                if item.get("seller_rating") is not None:
+                    ttk.Label(price_frame, text=f"  ★ {item['seller_rating']:.1f}",
+                              font=('Arial', 10), foreground="#c68a00").pack(side="left", padx=(10, 0))
 
                 desc = tk.Text(card, height=4, wrap=tk.WORD, font=('Arial', 9))
                 desc.insert("1.0", item['description'])
