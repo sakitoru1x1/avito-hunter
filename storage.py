@@ -87,6 +87,8 @@ def update_all_items(all_items, new_items, max_items, log_callback=None):
                 if old["id"] == item["id"]:
                     item["first_seen"] = old.get("first_seen", "Н/Д")
                     item["is_favorite"] = old.get("is_favorite", False)
+                    if item.get("seller_rating") is None:
+                        item["seller_rating"] = old.get("seller_rating")
                     break
             item["is_new"] = False
 

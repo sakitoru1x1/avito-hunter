@@ -22,7 +22,8 @@ CREATE TABLE IF NOT EXISTS ads (
     first_seen TEXT,
     last_seen TEXT,
     is_active INTEGER DEFAULT 1,
-    is_favorite INTEGER DEFAULT 0
+    is_favorite INTEGER DEFAULT 0,
+    seller_rating REAL
 );
 
 CREATE TABLE IF NOT EXISTS search_profiles (
@@ -67,11 +68,13 @@ def get_conn():
 def init_db():
     with get_conn() as conn:
         conn.executescript(SCHEMA)
-        # Миграция: добавление is_favorite если её ещё нет
+        # Миграции: добавление новых колонок если их ещё нет
         cur = conn.execute("PRAGMA table_info(ads)")
         cols = {row["name"] for row in cur.fetchall()}
         if "is_favorite" not in cols:
             conn.execute("ALTER TABLE ads ADD COLUMN is_favorite INTEGER DEFAULT 0")
+        if "seller_rating" not in cols:
+            conn.execute("ALTER TABLE ads ADD COLUMN seller_rating REAL")
 
 
 def _row_to_item(row):
@@ -79,6 +82,10 @@ def _row_to_item(row):
         is_fav = bool(row["is_favorite"])
     except (IndexError, KeyError):
         is_fav = False
+    try:
+        rating = row["seller_rating"]
+    except (IndexError, KeyError):
+        rating = None
     return {
         "id": row["id"],
         "title": row["title"],
@@ -93,6 +100,7 @@ def _row_to_item(row):
         "last_seen": row["last_seen"],
         "is_active": bool(row["is_active"]),
         "is_favorite": is_fav,
+        "seller_rating": rating,
         "is_new": False,
     }
 
@@ -123,14 +131,16 @@ def upsert_ad(item, search_query=None):
             first_seen = item.get("first_seen") or now
             conn.execute(
                 """INSERT INTO ads (id, title, price, link, image_url, description, date,
-                                    pub_date_timestamp, search_query, first_seen, last_seen, is_active)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)""",
+                                    pub_date_timestamp, search_query, first_seen, last_seen, is_active,
+                                    seller_rating)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)""",
                 (
                     item["id"], item.get("title"), item.get("price"), item.get("link"),
                     item.get("image_url"), item.get("description"), item.get("date"),
                     item.get("pub_date_timestamp") or 0,
                     item.get("search_query") or search_query,
                     first_seen, now,
+                    item.get("seller_rating"),
                 ),
             )
             if item.get("price") is not None:
@@ -144,14 +154,16 @@ def upsert_ad(item, search_query=None):
             conn.execute(
                 """UPDATE ads SET title=?, price=?, link=?, image_url=?, description=?,
                                   date=?, pub_date_timestamp=?, search_query=COALESCE(?, search_query),
-                                  last_seen=?, is_active=1
+                                  last_seen=?, is_active=1,
+                                  seller_rating=COALESCE(?, seller_rating)
                    WHERE id=?""",
                 (
                     item.get("title"), item.get("price"), item.get("link"),
                     item.get("image_url"), item.get("description"), item.get("date"),
                     item.get("pub_date_timestamp") or 0,
                     item.get("search_query") or search_query,
-                    now, item["id"],
+                    now, item.get("seller_rating"),
+                    item["id"],
                 ),
             )
             if item.get("price") is not None and item["price"] != old_price:
