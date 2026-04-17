@@ -178,6 +178,15 @@ class ParserApp:
         bottom_frame = ttk.LabelFrame(tab_results, text="Результаты поиска", padding=5)
         bottom_frame.pack(fill="both", expand=True, pady=(5, 0))
 
+        results_toolbar = ttk.Frame(bottom_frame)
+        results_toolbar.pack(fill="x", pady=(0, 5))
+        self.favorites_only_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(
+            results_toolbar, text="⭐ Только избранное",
+            variable=self.favorites_only_var,
+            command=self.display_results,
+        ).pack(side="left", padx=5)
+
         self.canvas = tk.Canvas(bottom_frame, borderwidth=0, highlightthickness=0)
         self.scrollbar = ttk.Scrollbar(bottom_frame, orient="vertical", command=self.canvas.yview)
         self.canvas.configure(yscrollcommand=self.scrollbar.set)
@@ -607,6 +616,16 @@ yR1ByZ:paNHYV8EM7su - до двоеточия логин, после - паро�
         self.log_text.see(tk.END)
         logger.info(message)
         self.root.update()
+
+    def toggle_favorite(self, item):
+        """Переключает отметку 'избранное' у объявления."""
+        new_val = not bool(item.get("is_favorite"))
+        item["is_favorite"] = new_val
+        try:
+            database.set_favorite(item["id"], new_val)
+        except Exception as e:
+            self.log(f"⚠️ Не удалось обновить избранное: {e}")
+        self.display_results()
 
     def set_status(self, text, counter=None):
         """Обновляет текст статусбара внизу окна."""
@@ -1455,7 +1474,10 @@ yR1ByZ:paNHYV8EM7su - до двоеточия логин, после - паро�
                 'Referer': 'https://www.avito.ru/'
             })
 
-            for item in self.all_items:
+            fav_only = self.favorites_only_var.get() if hasattr(self, 'favorites_only_var') else False
+            visible_items = [it for it in self.all_items if (not fav_only) or it.get("is_favorite")]
+
+            for item in visible_items:
                 card = ttk.Frame(self.results_frame, relief="solid", borderwidth=1, padding=10)
                 card.pack(fill="x", padx=5, pady=5)
 
@@ -1478,6 +1500,14 @@ yR1ByZ:paNHYV8EM7su - до двоеточия логин, после - паро�
 
                 header = ttk.Frame(card)
                 header.grid(row=0, column=0, columnspan=2, sticky="w", pady=5)
+
+                fav_btn = ttk.Button(
+                    header,
+                    text=("⭐" if item.get("is_favorite") else "☆"),
+                    width=3,
+                    command=lambda _it=item: self.toggle_favorite(_it),
+                )
+                fav_btn.pack(side="left", padx=(0, 5))
                 ttk.Label(header, text=item['title'], font=('Arial', 12, 'bold')).pack(side="left")
 
                 img_label = ttk.Label(card)

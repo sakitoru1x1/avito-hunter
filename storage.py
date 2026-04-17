@@ -80,11 +80,13 @@ def update_all_items(all_items, new_items, max_items, log_callback=None):
         if item["id"] not in existing_ids:
             item["is_new"] = True
             item["first_seen"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            item.setdefault("is_favorite", False)
             new_ones.append(item)
         else:
             for old in all_items:
                 if old["id"] == item["id"]:
                     item["first_seen"] = old.get("first_seen", "Н/Д")
+                    item["is_favorite"] = old.get("is_favorite", False)
                     break
             item["is_new"] = False
 

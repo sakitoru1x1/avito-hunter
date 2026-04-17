@@ -21,7 +21,8 @@ CREATE TABLE IF NOT EXISTS ads (
     search_query TEXT,
     first_seen TEXT,
     last_seen TEXT,
-    is_active INTEGER DEFAULT 1
+    is_active INTEGER DEFAULT 1,
+    is_favorite INTEGER DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS search_profiles (
@@ -66,9 +67,18 @@ def get_conn():
 def init_db():
     with get_conn() as conn:
         conn.executescript(SCHEMA)
+        # Миграция: добавление is_favorite если её ещё нет
+        cur = conn.execute("PRAGMA table_info(ads)")
+        cols = {row["name"] for row in cur.fetchall()}
+        if "is_favorite" not in cols:
+            conn.execute("ALTER TABLE ads ADD COLUMN is_favorite INTEGER DEFAULT 0")
 
 
 def _row_to_item(row):
+    try:
+        is_fav = bool(row["is_favorite"])
+    except (IndexError, KeyError):
+        is_fav = False
     return {
         "id": row["id"],
         "title": row["title"],
@@ -82,6 +92,7 @@ def _row_to_item(row):
         "first_seen": row["first_seen"],
         "last_seen": row["last_seen"],
         "is_active": bool(row["is_active"]),
+        "is_favorite": is_fav,
         "is_new": False,
     }
 
@@ -180,6 +191,15 @@ def clear_all():
     with get_conn() as conn:
         conn.execute("DELETE FROM price_history")
         conn.execute("DELETE FROM ads")
+
+
+def set_favorite(ad_id, is_favorite):
+    """Помечает/снимает пометку 'избранное' для объявления."""
+    with get_conn() as conn:
+        conn.execute(
+            "UPDATE ads SET is_favorite = ? WHERE id = ?",
+            (1 if is_favorite else 0, ad_id),
+        )
 
 
 # ---------- Поисковые профили ----------
