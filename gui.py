@@ -63,6 +63,16 @@ class ParserApp:
         self._apply_active_profile_on_startup()
 
     def create_widgets(self):
+        # Статусбар (создаём первым, чтобы он пришпилился к низу)
+        statusbar = ttk.Frame(self.root, relief="sunken", borderwidth=1)
+        statusbar.pack(side="bottom", fill="x")
+        self.status_var = tk.StringVar(value="⏸ Ожидание")
+        self.status_label = ttk.Label(statusbar, textvariable=self.status_var, anchor="w", padding=(5, 2))
+        self.status_label.pack(side="left", fill="x", expand=True)
+        self.status_counter_var = tk.StringVar(value="")
+        self.status_counter_label = ttk.Label(statusbar, textvariable=self.status_counter_var, anchor="e", padding=(5, 2))
+        self.status_counter_label.pack(side="right")
+
         main_container = ttk.Frame(self.root)
         main_container.pack(fill="both", expand=True, padx=10, pady=5)
 
@@ -598,6 +608,16 @@ yR1ByZ:paNHYV8EM7su - до двоеточия логин, после - паро�
         logger.info(message)
         self.root.update()
 
+    def set_status(self, text, counter=None):
+        """Обновляет текст статусбара внизу окна."""
+        try:
+            self.status_var.set(text)
+            if counter is not None:
+                self.status_counter_var.set(counter)
+            self.root.update_idletasks()
+        except Exception:
+            pass
+
     def _get_proxy_settings(self):
         return {
             'scheme': self.proxy_scheme_var.get(),
@@ -1132,6 +1152,7 @@ yR1ByZ:paNHYV8EM7su - до двоеточия логин, после - паро�
 
             items = driver.find_elements(By.CSS_SELECTOR, "[data-marker='item']")
             self.log(f"Найдено карточек: {len(items)}")
+            self.set_status(f"📋 Обработка карточек: {len(items)}")
             new_results = self.parse_items(items, min_price, max_price)
             self.log(f"Отобрано по цене: {len(new_results)}")
 
@@ -1149,6 +1170,10 @@ yR1ByZ:paNHYV8EM7su - до двоеточия логин, после - паро�
 
             save_data(self.all_items, self.log)
             self.root.after(0, self.display_results)
+            self.set_status(
+                f"✅ Готово. Новых: {added}",
+                counter=f"Всего в БД: {len(self.all_items)}",
+            )
 
         except Exception as e:
             error_trace = traceback.format_exc()
@@ -1156,6 +1181,7 @@ yR1ByZ:paNHYV8EM7su - до двоеточия логин, после - паро�
             logger.error(f"Ошибка парсинга: {error_trace}")
             self.send_tg_status(f"❌ Ошибка: {str(e)}")
             self.send_error_telegram(error_trace)
+            self.set_status(f"❌ Ошибка: {str(e)[:60]}")
         finally:
             self.progress.stop()
             self.start_button.config(state='normal')
@@ -1512,6 +1538,7 @@ yR1ByZ:paNHYV8EM7su - до двоеточия логин, после - паро�
         self.stop_button.config(state='normal')
         self.progress.start()
         self.log("Ручной парсинг...")
+        self.set_status(f"🔍 Ищем: {query}")
         threading.Thread(target=self.run_parser, args=(query, min_price, max_price, city), daemon=True).start()
 
     def toggle_auto_update(self):
@@ -1545,6 +1572,7 @@ yR1ByZ:paNHYV8EM7su - до двоеточия логин, после - паро�
         self.stop_auto_update()
         self.log("⏹️ Запрос на остановку парсинга отправлен")
         self.send_tg_status("⏹️ Парсер остановлен")
+        self.set_status("⏹ Остановлено")
 
     def run_auto_parsing(self):
         if not self.auto_update:
