@@ -17,12 +17,23 @@
 
 ## Установка
 
-```bash
-pip install -r requirements.txt
-python main.py
-```
+Нужен установленный Chrome, Python 3.9+ и git.
 
-Нужен установленный Chrome. Selenium сам подтянет драйвер.
+1. Открой PowerShell (или любой терминал) в удобной папке
+2. Клонируй репо:
+   ```
+   git clone https://github.com/sakitoru1x1/avito-news-parser
+   ```
+3. Зайди в папку и поставь зависимости:
+   ```
+   cd avito-news-parser
+   pip install -r requirements.txt
+   ```
+4. Запускай двойным кликом по `start.bat` - он подтягивает свежую версию и запускает приложение.
+
+   Либо вручную: `python main.py`
+
+Selenium сам подтянет драйвер Chrome.
 
 ## Модули
 
