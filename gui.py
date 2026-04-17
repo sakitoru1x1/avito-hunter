@@ -1528,25 +1528,38 @@ yR1ByZ:paNHYV8EM7su - до двоеточия логин, после - паро�
             fav_only = self.favorites_only_var.get() if hasattr(self, 'favorites_only_var') else False
             visible_items = [it for it in self.all_items if (not fav_only) or it.get("is_favorite")]
 
+            style = ttk.Style()
+            style.configure("New.TFrame", background="#ffcccc")
+            style.configure("Hover.TFrame", background="#e8f0ff")
+            style.configure("NewHover.TFrame", background="#ffb3b3")
+
             for item in visible_items:
                 card = ttk.Frame(self.results_frame, relief="solid", borderwidth=1, padding=10)
                 card.pack(fill="x", padx=5, pady=5)
 
-                hover_handled = False
+                state = {"hover_handled": False, "is_new": item.get("is_new", False)}
 
-                def on_enter(event, _item=item, _card=card):
-                    nonlocal hover_handled
-                    if not hover_handled and _item.get("is_new", False):
-                        hover_handled = True
+                def base_style(st=state):
+                    return "New.TFrame" if st["is_new"] else ""
+
+                def hover_style(st=state):
+                    return "NewHover.TFrame" if st["is_new"] else "Hover.TFrame"
+
+                def on_enter(event, _item=item, _card=card, st=state):
+                    if not st["hover_handled"] and st["is_new"]:
+                        st["hover_handled"] = True
                         _item["is_new"] = False
-                        _card.config(style="")
+                        st["is_new"] = False
                         self.root.after(100, self._save_data)
+                    _card.config(style=hover_style(st))
+
+                def on_leave(event, _card=card, st=state):
+                    _card.config(style=base_style(st))
 
                 card.bind("<Enter>", on_enter, add="+")
+                card.bind("<Leave>", on_leave, add="+")
 
-                if item.get("is_new", False):
-                    style = ttk.Style()
-                    style.configure("New.TFrame", background="#ffcccc")
+                if state["is_new"]:
                     card.config(style="New.TFrame")
 
                 header = ttk.Frame(card)
