@@ -221,6 +221,12 @@ class ParserApp:
         proxy_frame = ctk.CTkFrame(tab_settings, border_width=1)
         proxy_frame.pack(fill="x", padx=10, pady=5)
         ctk.CTkLabel(proxy_frame, text="Прокси", font=ctk.CTkFont(weight="bold")).grid(row=0, column=0, columnspan=7, pady=(5,0))
+        ctk.CTkLabel(
+            proxy_frame,
+            text="желательно российский (для Avito)",
+            text_color="gray",
+            font=ctk.CTkFont(size=11),
+        ).grid(row=0, column=0, columnspan=7, sticky="e", padx=10)
 
         ctk.CTkLabel(proxy_frame, text="Тип:").grid(row=1, column=0, sticky="w", pady=2, padx=5)
         self.proxy_scheme_var = tk.StringVar(value="http")
@@ -266,6 +272,12 @@ class ParserApp:
         tg_proxy_sub = ctk.CTkFrame(telegram_frame, border_width=1)
         tg_proxy_sub.grid(row=4, column=0, columnspan=2, sticky="ew", padx=5, pady=(10, 5))
         ctk.CTkLabel(tg_proxy_sub, text="Прокси для Telegram (необязательно)", font=ctk.CTkFont(weight="bold")).grid(row=0, column=0, columnspan=6, pady=(5,0))
+        ctk.CTkLabel(
+            tg_proxy_sub,
+            text="только зарубежный (РКН блочит api.telegram.org)",
+            text_color="gray",
+            font=ctk.CTkFont(size=11),
+        ).grid(row=0, column=0, columnspan=6, sticky="e", padx=10)
 
         ctk.CTkLabel(tg_proxy_sub, text="Тип:").grid(row=1, column=0, sticky="w", pady=2, padx=5)
         self.tg_proxy_scheme_var = tk.StringVar(value="http")
