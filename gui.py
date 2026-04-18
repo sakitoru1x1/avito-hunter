@@ -115,6 +115,13 @@ class ParserApp:
         self.query_entry.pack(side="left", padx=2, fill="x", expand=True)
         self.query_entry.insert(0, "")
 
+        row2b = ctk.CTkFrame(left_frame)
+        row2b.pack(fill="x", pady=2)
+        ctk.CTkLabel(row2b, text="Игнор:").pack(side="left", padx=2)
+        self.ignore_entry = ctk.CTkEntry(row2b, width=30*8,
+                                          placeholder_text="через запятую: 3s, б/у, сломан")
+        self.ignore_entry.pack(side="left", padx=2, fill="x", expand=True)
+
         row3 = ctk.CTkFrame(left_frame)
         row3.pack(fill="x", pady=2)
         ctk.CTkLabel(row3, text="Цена от:").pack(side="left", padx=2)
@@ -380,6 +387,11 @@ class ParserApp:
         ctk.CTkLabel(profiles_right, text="Запрос:").grid(row=2, column=0, sticky="w", pady=2, padx=5)
         self.profile_query_entry = ctk.CTkEntry(profiles_right, width=30*8)
         self.profile_query_entry.grid(row=2, column=1, padx=5, pady=2, sticky="w")
+
+        ctk.CTkLabel(profiles_right, text="Игнор:").grid(row=2, column=2, sticky="w", pady=2, padx=(15, 5))
+        self.profile_ignore_entry = ctk.CTkEntry(profiles_right, width=30*8,
+                                                  placeholder_text="через запятую: 3s, б/у")
+        self.profile_ignore_entry.grid(row=2, column=3, padx=5, pady=2, sticky="w")
 
         ctk.CTkLabel(profiles_right, text="Город:").grid(row=3, column=0, sticky="w", pady=2, padx=5)
         self.profile_city_var = tk.StringVar(value="Москва")
@@ -806,6 +818,7 @@ yR1ByZ:paNHYV8EM7su - до двоеточия логин, после - паро�
         self._current_profile_id = None
         self.profile_name_entry.delete(0, tk.END)
         self.profile_query_entry.delete(0, tk.END)
+        self.profile_ignore_entry.delete(0, tk.END)
         self.profile_city_var.set("Москва")
         self.profile_min_price_entry.delete(0, tk.END)
         self.profile_max_price_entry.delete(0, tk.END)
@@ -823,6 +836,8 @@ yR1ByZ:paNHYV8EM7su - до двоеточия логин, после - паро�
         self.profile_name_entry.insert(0, profile["name"] or "")
         self.profile_query_entry.delete(0, tk.END)
         self.profile_query_entry.insert(0, filters.get("query", ""))
+        self.profile_ignore_entry.delete(0, tk.END)
+        self.profile_ignore_entry.insert(0, filters.get("ignore", ""))
         self.profile_city_var.set(profile["city"] or "Москва")
         self.profile_min_price_entry.delete(0, tk.END)
         if filters.get("min_price") is not None:
@@ -856,6 +871,7 @@ yR1ByZ:paNHYV8EM7su - до двоеточия логин, после - паро�
     def _collect_profile_from_form(self):
         name = self.profile_name_entry.get().strip()
         query = self.profile_query_entry.get().strip()
+        ignore = self.profile_ignore_entry.get().strip()
         city = self.profile_city_var.get().strip() or "Москва"
         min_price_str = self.profile_min_price_entry.get().strip()
         max_price_str = self.profile_max_price_entry.get().strip()
@@ -879,6 +895,7 @@ yR1ByZ:paNHYV8EM7su - до двоеточия логин, после - паро�
 
         filters = {
             "query": query,
+            "ignore": ignore,
             "min_price": min_price,
             "max_price": max_price,
             "min_interval": min_interval,
@@ -969,6 +986,7 @@ yR1ByZ:paNHYV8EM7su - до двоеточия логин, после - паро�
 
         filters = {
             "query": query,
+            "ignore": self.ignore_entry.get().strip(),
             "min_price": min_price,
             "max_price": max_price,
             "min_interval": min_interval,
@@ -1017,6 +1035,8 @@ yR1ByZ:paNHYV8EM7su - до двоеточия логин, после - паро�
         filters = profile.get("filters") or {}
         self.query_entry.delete(0, tk.END)
         self.query_entry.insert(0, filters.get("query", ""))
+        self.ignore_entry.delete(0, tk.END)
+        self.ignore_entry.insert(0, filters.get("ignore", ""))
         self.min_price_entry.delete(0, tk.END)
         if filters.get("min_price") is not None:
             self.min_price_entry.insert(0, str(filters.get("min_price")))
@@ -1309,9 +1329,16 @@ yR1ByZ:paNHYV8EM7su - до двоеточия логин, после - паро�
         except Exception:
             return None
 
+    def _get_ignore_words(self):
+        raw = self.ignore_entry.get().strip()
+        if not raw:
+            return []
+        return [w.strip().lower() for w in raw.split(",") if w.strip()]
+
     def parse_items(self, items, min_price, max_price):
         result = []
         total = len(items)
+        ignore_words = self._get_ignore_words()
         for idx, item in enumerate(items):
             if self.stop_parsing:
                 self.log("⏹️ Парсинг прерван пользователем")
@@ -1392,6 +1419,13 @@ yR1ByZ:paNHYV8EM7su - до двоеточия логин, после - паро�
                             description = "\n".join(full_text)
                     except Exception:
                         pass
+
+                if ignore_words:
+                    haystack = f"{title} {description}".lower()
+                    hit = next((w for w in ignore_words if w in haystack), None)
+                    if hit:
+                        self.log(f"🚫 Игнор-слово «{hit}»: {title[:40]}...")
+                        continue
 
                 date_str = self.extract_date(item)
                 timestamp = parse_date_to_timestamp(date_str)
