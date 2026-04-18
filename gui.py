@@ -1640,38 +1640,62 @@ yR1ByZ:paNHYV8EM7su - до двоеточия логин, после - паро�
             self.telegram_notifier.send_message(msg)
 
     # ---------- Загрузка изображений ----------
-    def _load_image_async(self, session, image_url, img_label, card):
-        try:
-            resp = session.get(image_url, timeout=15, stream=True)
-            if resp.status_code == 200:
-                img = Image.open(BytesIO(resp.content))
-                img.thumbnail((150, 150))
-                self.root.after(0, lambda: self._set_image(img, img_label))
-            else:
-                self.root.after(0, lambda: self._set_image_fallback(image_url, img_label, card))
-        except Exception:
-            self.root.after(0, lambda: self._set_image_fallback(image_url, img_label, card))
+    def _load_image_async(self, session, image_url, img_label, card, gen):
+        """Скачивает картинку с 2 попытками. gen - generation counter, чтоб не писать
+        результат в уничтоженные виджеты после перерисовки."""
+        img = None
+        last_err = None
+        for attempt in range(2):
+            if gen != self._results_gen:
+                return  # карточки уже перерисованы - выкидываем результат
+            try:
+                resp = session.get(image_url, timeout=20)
+                if resp.status_code == 200 and resp.content:
+                    img = Image.open(BytesIO(resp.content))
+                    img.load()
+                    img.thumbnail((150, 150))
+                    break
+                last_err = f"HTTP {resp.status_code}"
+            except Exception as e:
+                last_err = str(e)
 
-    def _set_image(self, pil_image, img_label):
+        if gen != self._results_gen:
+            return
+
+        if img is not None:
+            self.root.after(0, lambda: self._set_image(img, img_label, gen))
+        else:
+            logger.warning(f"Не скачалась картинка {image_url[:80]}: {last_err}")
+            self.root.after(0, lambda: self._set_image_fallback(image_url, img_label, card, gen))
+
+    def _set_image(self, pil_image, img_label, gen):
+        if gen != self._results_gen:
+            return
         try:
+            if not img_label.winfo_exists():
+                return
             size = pil_image.size
             photo = ctk.CTkImage(light_image=pil_image, dark_image=pil_image, size=size)
             self.images.append(photo)
             img_label.configure(image=photo, text="")
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"Не применилась картинка: {e}")
 
-    def _set_image_fallback(self, url, img_label, card):
+    def _set_image_fallback(self, url, img_label, card, gen):
+        if gen != self._results_gen:
+            return
         try:
-            img_label.destroy()
-            btn = ctk.CTkButton(card, text="📷 Открыть фото",
-                             command=lambda: webbrowser.open(url))
-            btn.grid(row=1, column=0, padx=5, pady=5)
+            if not img_label.winfo_exists():
+                return
+            img_label.configure(text="📷 Открыть фото", text_color="#4a9eff", cursor="hand2")
+            img_label.bind("<Button-1>", lambda e, u=url: webbrowser.open(u))
         except Exception:
             pass
 
     def display_results(self):
         try:
+            self._results_gen = getattr(self, '_results_gen', 0) + 1
+            gen = self._results_gen
             for widget in self.results_frame.winfo_children():
                 widget.destroy()
             self.images = []
@@ -1736,8 +1760,9 @@ yR1ByZ:paNHYV8EM7su - до двоеточия логин, после - паро�
                 img_label.grid(row=1, column=0, rowspan=5, padx=5, pady=5, sticky="n")
 
                 if item['image_url'] != "Н/Д":
+                    img_label.configure(text="⏳", text_color="gray")
                     self.image_executor.submit(
-                        self._load_image_async, session, item['image_url'], img_label, card
+                        self._load_image_async, session, item['image_url'], img_label, card, gen
                     )
                 else:
                     img_label.configure(text="[нет фото]")
