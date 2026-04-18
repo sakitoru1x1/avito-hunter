@@ -108,7 +108,7 @@ def _row_to_item(row):
 def load_all_ads(max_items):
     with get_conn() as conn:
         cur = conn.execute(
-            "SELECT * FROM ads ORDER BY pub_date_timestamp DESC LIMIT ?",
+            "SELECT * FROM ads ORDER BY pub_date_timestamp DESC, first_seen DESC LIMIT ?",
             (max_items,),
         )
         return [_row_to_item(r) for r in cur.fetchall()]

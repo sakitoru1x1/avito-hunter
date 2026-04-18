@@ -101,7 +101,10 @@ def update_all_items(all_items, new_items, max_items, log_callback=None):
         item["is_new"] = False
 
     combined = new_ones + updated_old + old_remaining
-    combined.sort(key=lambda x: x.get('pub_date_timestamp', 0), reverse=True)
+    combined.sort(
+        key=lambda x: (x.get('pub_date_timestamp', 0), x.get('first_seen', '')),
+        reverse=True,
+    )
 
     if len(combined) > max_items:
         removed = len(combined) - max_items
