@@ -1576,21 +1576,22 @@ yR1ByZ:paNHYV8EM7su - до двоеточия логин, после - паро�
                 caption += f"📝 {desc}"
 
             img = item.get('image_url')
+            photo_bytes = None
             if img and img != "Н/Д" and img.startswith("http"):
-                photo_bytes = None
-                try:
-                    r = img_session.get(img, timeout=15)
-                    if r.status_code == 200 and r.content:
-                        photo_bytes = r.content
-                except Exception as e:
-                    logger.warning(f"Не удалось скачать картинку {img[:60]}: {e}")
+                for attempt in range(3):
+                    try:
+                        r = img_session.get(img, timeout=25)
+                        if r.status_code == 200 and r.content:
+                            photo_bytes = r.content
+                            break
+                    except Exception as e:
+                        logger.warning(f"Попытка {attempt+1}/3: не скачалась картинка {img[:60]}: {e}")
+                        time.sleep(1)
 
-                if photo_bytes:
-                    self.telegram_notifier.send_photo(caption=caption, photo_bytes=photo_bytes)
-                else:
-                    # Картинка не скачалась - пробуем старым способом по URL, иначе текст
-                    self.telegram_notifier.send_photo(photo_url=img, caption=caption)
+            if photo_bytes:
+                self.telegram_notifier.send_photo(caption=caption, photo_bytes=photo_bytes)
             else:
+                # Avito блокирует и нас и TG - шлём просто текст со ссылкой
                 self.telegram_notifier.send_message(caption)
 
     def _detect_disappeared(self, all_items, new_results, current_query):
