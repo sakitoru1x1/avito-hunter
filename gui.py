@@ -1759,7 +1759,7 @@ yR1ByZ:paNHYV8EM7su - до двоеточия логин, после - паро�
                         st["hover_handled"] = True
                         _item["is_new"] = False
                         st["is_new"] = False
-                        self.root.after(100, self._save_data)
+                        self.root.after(100, lambda: save_data(self.all_items))
                     _card.configure(fg_color=get_card_color(st, hover=True))
 
                 def on_leave(event, _card=card, st=state):
