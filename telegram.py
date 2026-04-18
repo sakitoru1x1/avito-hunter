@@ -53,22 +53,30 @@ class TelegramNotifier:
             logger.error(f"Ошибка отправки Telegram: {e}")
             return False
 
-    def send_photo(self, photo_url, caption=None, parse_mode='HTML'):
-        """Шлёт фото через sendPhoto по URL. При ошибке откатывается на sendMessage."""
+    def send_photo(self, photo_url=None, caption=None, parse_mode='HTML', photo_bytes=None):
+        """Шлёт фото через sendPhoto. Если передан photo_bytes - multipart upload.
+        Иначе - по URL. При ошибке откатывается на sendMessage.
+        """
         if not self.enabled:
             return False
         try:
             url = f"{self.base_url}/sendPhoto"
-            payload = {
+            data = {
                 'chat_id': self.chat_id,
-                'photo': photo_url,
                 'parse_mode': parse_mode,
             }
             if caption:
                 if len(caption) > 1024:
                     caption = caption[:1020] + "..."
-                payload['caption'] = caption
-            response = requests.post(url, data=payload, timeout=15, proxies=self.proxies)
+                data['caption'] = caption
+
+            if photo_bytes:
+                files = {'photo': ('image.jpg', photo_bytes, 'image/jpeg')}
+                response = requests.post(url, data=data, files=files, timeout=30, proxies=self.proxies)
+            else:
+                data['photo'] = photo_url
+                response = requests.post(url, data=data, timeout=15, proxies=self.proxies)
+
             if response.status_code == 200:
                 return True
             logger.warning(f"sendPhoto вернул {response.status_code}: {response.text[:200]}")
