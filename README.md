@@ -52,12 +52,12 @@
 2. В этой папке щёлкни правой кнопкой в пустое место → «Открыть в терминале» (или «Open Git Bash here»).
 3. Введи команду:
    ```
-   git clone https://github.com/sakitoru1x1/avito-hunter-s
+   git clone https://github.com/sakitoru1x1/avito-hunter
    ```
-   Появится папка `avito-hunter-s`.
+   Появится папка `avito-hunter`.
 4. Зайди в неё:
    ```
-   cd avito-hunter-s
+   cd avito-hunter
    ```
 5. Поставь все нужные библиотеки (это делается один раз):
    ```
@@ -219,6 +219,6 @@ python main.py
 
 ## Проблемы и баги
 
-Если что-то не работает - открой Issue на GitHub: https://github.com/sakitoru1x1/avito-hunter-s/issues
+Если что-то не работает - открой Issue на GitHub: https://github.com/sakitoru1x1/avito-hunter/issues
 
 Приложи лог из `parser.log` и опиши что именно не работает.
