@@ -266,15 +266,16 @@ class ParserApp:
 
         telegram_frame = ctk.CTkFrame(tab_settings, border_width=1)
         telegram_frame.pack(fill="x", padx=10, pady=5)
+        telegram_frame.grid_columnconfigure(1, weight=1)
         ctk.CTkLabel(telegram_frame, text="Telegram уведомления", font=ctk.CTkFont(weight="bold")).grid(row=0, column=0, columnspan=2, pady=(5,0))
 
-        ctk.CTkLabel(telegram_frame, text="Токен бота:").grid(row=1, column=0, sticky="w", pady=2, padx=5)
-        self.telegram_token_entry = ctk.CTkEntry(telegram_frame, width=50*8)
-        self.telegram_token_entry.grid(row=1, column=1, padx=5, pady=2)
+        ctk.CTkLabel(telegram_frame, text="Токен бота:").grid(row=1, column=0, sticky="e", pady=2, padx=5)
+        self.telegram_token_entry = ctk.CTkEntry(telegram_frame)
+        self.telegram_token_entry.grid(row=1, column=1, padx=5, pady=2, sticky="ew")
 
-        ctk.CTkLabel(telegram_frame, text="Chat ID:").grid(row=2, column=0, sticky="w", pady=2, padx=5)
-        self.telegram_chat_id_entry = ctk.CTkEntry(telegram_frame, width=50*8)
-        self.telegram_chat_id_entry.grid(row=2, column=1, padx=5, pady=2)
+        ctk.CTkLabel(telegram_frame, text="Chat ID:").grid(row=2, column=0, sticky="e", pady=2, padx=5)
+        self.telegram_chat_id_entry = ctk.CTkEntry(telegram_frame)
+        self.telegram_chat_id_entry.grid(row=2, column=1, padx=5, pady=2, sticky="ew")
 
         # Отдельный прокси для Telegram
         tg_proxy_sub = ctk.CTkFrame(telegram_frame, border_width=1)
@@ -322,13 +323,13 @@ class ParserApp:
         self.telegram_status_label.grid(row=4, column=0, columnspan=2, padx=5, pady=(5, 5))
 
         # Уведомления о статусе парсера
-        ctk.CTkLabel(telegram_frame, text="Уведомления о статусе:").grid(row=5, column=0, sticky="w", pady=(10, 2), padx=5)
+        ctk.CTkLabel(telegram_frame, text="Уведомления о статусе:").grid(row=5, column=0, sticky="e", pady=(10, 5), padx=5)
         self.tg_notify_status_var = tk.BooleanVar(value=True)
         self.tg_notify_status_cb = ctk.CTkCheckBox(
             telegram_frame, text="Слать старт/стоп/ошибки в Telegram",
             variable=self.tg_notify_status_var,
         )
-        self.tg_notify_status_cb.grid(row=5, column=1, padx=5, sticky="w")
+        self.tg_notify_status_cb.grid(row=5, column=1, padx=5, sticky="w", pady=(10, 5))
 
         schedule_frame = ctk.CTkFrame(tab_settings, border_width=1)
         schedule_frame.pack(fill="x", padx=10, pady=5)
