@@ -214,6 +214,18 @@ def set_favorite(ad_id, is_favorite):
         )
 
 
+def mark_inactive(ad_ids):
+    """Помечает список объявлений как неактивные (is_active=0)."""
+    if not ad_ids:
+        return
+    with get_conn() as conn:
+        placeholders = ",".join("?" for _ in ad_ids)
+        conn.execute(
+            f"UPDATE ads SET is_active = 0 WHERE id IN ({placeholders})",
+            tuple(ad_ids),
+        )
+
+
 # ---------- Поисковые профили ----------
 
 def _row_to_profile(row):

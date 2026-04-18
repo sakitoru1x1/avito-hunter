@@ -1253,6 +1253,12 @@ yR1ByZ:paNHYV8EM7su - до двоеточия логин, после - паро�
             new_results = self.parse_items(items, min_price, max_price)
             self.log(f"Отобрано по цене: {len(new_results)}")
 
+            current_query = self.query_entry.get().strip()
+            disappeared = self._detect_disappeared(self.all_items, new_results, current_query)
+            if disappeared:
+                database.mark_inactive([it["id"] for it in disappeared])
+                self.send_disappeared_notification(disappeared)
+
             self.all_items, added = update_all_items(self.all_items, new_results, self.max_items, self.log)
             if added > 0:
                 self.log(f"Добавлено новых объявлений: {added}")
@@ -1566,6 +1572,52 @@ yR1ByZ:paNHYV8EM7su - до двоеточия логин, после - паро�
         if current_msg:
             messages.append(current_msg)
 
+        for msg in messages:
+            self.telegram_notifier.send_message(msg)
+
+    def _detect_disappeared(self, all_items, new_results, current_query):
+        """Находит объявления, которые были активны в выдаче и пропали в текущем парсе."""
+        if not new_results or not all_items:
+            return []
+        new_ids = {item["id"] for item in new_results}
+        min_ts = min((r.get("pub_date_timestamp", 0) or 0) for r in new_results)
+        if min_ts <= 0:
+            return []
+        disappeared = []
+        for old in all_items:
+            if old.get("id") in new_ids:
+                continue
+            if not old.get("is_active", True):
+                continue
+            if current_query and old.get("search_query") and old["search_query"] != current_query:
+                continue
+            old_ts = old.get("pub_date_timestamp", 0) or 0
+            if old_ts < min_ts:
+                continue
+            disappeared.append(old)
+        return disappeared
+
+    def send_disappeared_notification(self, disappeared):
+        if not disappeared:
+            return
+        if not self.update_telegram_notifier():
+            return
+        self.log(f"🗑️ Пропало объявлений: {len(disappeared)}")
+        MAX_LEN = 4000
+        header = f"<b>🗑️ Объявления сняты: {len(disappeared)}</b>\n\n"
+        current_msg = header
+        messages = []
+        for item in disappeared:
+            price = item.get("price")
+            price_str = f"{price} руб." if price else "цена не указана"
+            block = f"• <s>{item.get('title', 'Н/Д')}</s> - было {price_str}\n\n"
+            if len(current_msg) + len(block) > MAX_LEN:
+                messages.append(current_msg)
+                current_msg = "🔹 Продолжение:\n\n" + block
+            else:
+                current_msg += block
+        if current_msg:
+            messages.append(current_msg)
         for msg in messages:
             self.telegram_notifier.send_message(msg)
 
