@@ -196,6 +196,15 @@ class ParserApp:
 
         self.log_text = ctk.CTkTextbox(right_frame, wrap="word", height=200)
         self.log_text.pack(fill="both", expand=True, padx=5, pady=5)
+        # Read-only, но с возможностью выделять/копировать
+        self.log_text.configure(state="disabled")
+        # Тег для ссылок - синие, подчёркнутые, курсор-рука
+        self.log_text._textbox.tag_configure("link", foreground="#4EA1FF", underline=True)
+        self.log_text._textbox.tag_bind("link", "<Enter>",
+            lambda e: self.log_text._textbox.configure(cursor="hand2"))
+        self.log_text._textbox.tag_bind("link", "<Leave>",
+            lambda e: self.log_text._textbox.configure(cursor=""))
+        self.log_text._textbox.tag_bind("link", "<Button-1>", self._on_log_link_click)
 
         bottom_frame = ctk.CTkFrame(tab_results, border_width=1)
         bottom_frame.pack(fill="both", expand=True, pady=(5, 0))
@@ -665,13 +674,41 @@ yR1ByZ:paNHYV8EM7su - до двоеточия логин, после - паро�
             self.city_var.set("Москва")
 
     def log(self, message):
-        self.log_text.insert(tk.END, message + "\n")
+        tb = self.log_text._textbox
+        tb.configure(state="normal")
+        # Ставим mark перед вставкой - gravity="left" чтобы не ехал вместе с текстом
+        tb.mark_set("_log_ins", tk.END + "-1c")
+        tb.mark_gravity("_log_ins", "left")
+        tb.insert(tk.END, message + "\n")
+        # Подсвечиваем URL как ссылки
+        import re as _re
+        for m in _re.finditer(r"https?://\S+", message):
+            link_start = f"_log_ins+{m.start()}c"
+            link_end = f"_log_ins+{m.end()}c"
+            tb.tag_add("link", link_start, link_end)
         try:
-            self.log_text._textbox.see(tk.END)
+            tb.see(tk.END)
         except Exception:
             pass
+        tb.configure(state="disabled")
         logger.info(message)
         self.root.update()
+
+    def _on_log_link_click(self, event):
+        tb = self.log_text._textbox
+        idx = tb.index(f"@{event.x},{event.y}")
+        # Находим границы тега link под курсором
+        ranges = tb.tag_prevrange("link", idx + "+1c")
+        if not ranges:
+            return
+        url = tb.get(ranges[0], ranges[1])
+        try:
+            self.root.clipboard_clear()
+            self.root.clipboard_append(url)
+            self.root.update()
+            self.log(f"📋 Ссылка скопирована: {url[:60]}...")
+        except Exception as e:
+            logger.error(f"Не удалось скопировать ссылку: {e}")
 
     def _extract_seller_rating(self, item):
         """Пытается вытащить рейтинг продавца с карточки объявления. Возвращает float или None."""
