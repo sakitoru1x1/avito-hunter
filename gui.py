@@ -34,7 +34,7 @@ ctk.set_default_color_theme("blue")
 class ParserApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("Avito Hunter S. v.1.1 (Selenium Edition, Legacy)")
+        self.root.title("Avito Hunter v.1.1")
 
         screen_w = root.winfo_screenwidth()
         screen_h = root.winfo_screenheight()
