@@ -1542,38 +1542,25 @@ yR1ByZ:paNHYV8EM7su - до двоеточия логин, после - паро�
         if not new_items:
             return
 
-        MAX_LEN = 4000
-        messages = []
-        header = f"<b>🔔 Найдено новых объявлений: {len(new_items)}</b>\n\n"
-        current_msg = header
+        self.telegram_notifier.send_message(
+            f"<b>🔔 Найдено новых объявлений: {len(new_items)}</b>"
+        )
 
         for item in new_items:
-            block = f"• <a href='{item['link']}'>{item['title']}</a>\n"
-            block += f"  💰 Цена: {item['price']} руб.\n"
-            block += f"  🕒 Добавлено: {item.get('first_seen', 'Н/Д')}\n"
-
+            caption = f"<a href='{item['link']}'>{item['title']}</a>\n"
+            caption += f"💰 {item['price']} руб.\n"
+            caption += f"🕒 {item.get('first_seen', 'Н/Д')}\n"
             desc = item.get('description', '')
             if desc and desc != "Н/Д":
-                if len(desc) > 200:
-                    desc = desc[:200] + "..."
-                block += f"  📝 {desc}\n"
+                if len(desc) > 400:
+                    desc = desc[:400] + "..."
+                caption += f"📝 {desc}"
 
-            if item.get('image_url') and item['image_url'] != "Н/Д":
-                block += f"  🖼️ <a href='{item['image_url']}'>Изображение</a>\n"
-
-            block += "\n"
-
-            if len(current_msg) + len(block) > MAX_LEN:
-                messages.append(current_msg)
-                current_msg = "🔹 Продолжение списка:\n\n" + block
+            img = item.get('image_url')
+            if img and img != "Н/Д" and img.startswith("http"):
+                self.telegram_notifier.send_photo(img, caption=caption)
             else:
-                current_msg += block
-
-        if current_msg:
-            messages.append(current_msg)
-
-        for msg in messages:
-            self.telegram_notifier.send_message(msg)
+                self.telegram_notifier.send_message(caption)
 
     def _detect_disappeared(self, all_items, new_results, current_query):
         """Находит объявления, которые были активны в выдаче и пропали в текущем парсе."""

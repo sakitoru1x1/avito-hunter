@@ -53,6 +53,34 @@ class TelegramNotifier:
             logger.error(f"Ошибка отправки Telegram: {e}")
             return False
 
+    def send_photo(self, photo_url, caption=None, parse_mode='HTML'):
+        """Шлёт фото через sendPhoto по URL. При ошибке откатывается на sendMessage."""
+        if not self.enabled:
+            return False
+        try:
+            url = f"{self.base_url}/sendPhoto"
+            payload = {
+                'chat_id': self.chat_id,
+                'photo': photo_url,
+                'parse_mode': parse_mode,
+            }
+            if caption:
+                if len(caption) > 1024:
+                    caption = caption[:1020] + "..."
+                payload['caption'] = caption
+            response = requests.post(url, data=payload, timeout=15, proxies=self.proxies)
+            if response.status_code == 200:
+                return True
+            logger.warning(f"sendPhoto вернул {response.status_code}: {response.text[:200]}")
+            if caption:
+                return self.send_message(caption, parse_mode=parse_mode)
+            return False
+        except Exception as e:
+            logger.error(f"Ошибка отправки фото Telegram: {e}")
+            if caption:
+                return self.send_message(caption, parse_mode=parse_mode)
+            return False
+
     def test_connection(self):
         if not self.token:
             return False, "Токен не указан"
