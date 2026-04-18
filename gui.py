@@ -71,10 +71,12 @@ class ParserApp:
         statusbar.pack(side="bottom", fill="x")
         self.status_var = tk.StringVar(value="⏸ Ожидание")
         self.status_label = ctk.CTkLabel(statusbar, textvariable=self.status_var, anchor="w")
-        self.status_label.pack(side="left", fill="x", expand=True, padx=5, pady=2)
+        self.status_label.pack(side="left", padx=5, pady=2)
         self.status_counter_var = tk.StringVar(value="")
         self.status_counter_label = ctk.CTkLabel(statusbar, textvariable=self.status_counter_var, anchor="e")
         self.status_counter_label.pack(side="right", padx=5, pady=2)
+        self.progress = ctk.CTkProgressBar(statusbar, mode='indeterminate')
+        self.progress.pack(side="left", fill="x", expand=True, padx=10, pady=4)
 
         main_container = ctk.CTkFrame(self.root)
         main_container.pack(fill="both", expand=True, padx=10, pady=5)
@@ -163,11 +165,6 @@ class ParserApp:
                                                   command=self.save_current_search_as_profile)
         self.save_as_profile_button.pack(side="left", padx=2)
 
-        row6 = ctk.CTkFrame(left_frame)
-        row6.pack(fill="x", pady=2)
-        self.progress = ctk.CTkProgressBar(row6, mode='indeterminate', width=200)
-        self.progress.pack(side="left", padx=2)
-
         row7 = ctk.CTkFrame(left_frame)
         row7.pack(fill="x", pady=2)
         ctk.CTkLabel(row7, text="Интервал (мин): от").pack(side="left", padx=2)
@@ -227,41 +224,45 @@ class ParserApp:
 
         proxy_frame = ctk.CTkFrame(tab_settings, border_width=1)
         proxy_frame.pack(fill="x", padx=10, pady=5)
-        ctk.CTkLabel(proxy_frame, text="Прокси", font=ctk.CTkFont(weight="bold")).grid(row=0, column=0, columnspan=7, pady=(5,0))
+        proxy_frame.grid_columnconfigure(1, weight=1)
+        proxy_frame.grid_columnconfigure(3, weight=1)
+        proxy_frame.grid_columnconfigure(5, weight=1)
+
+        ctk.CTkLabel(proxy_frame, text="Прокси", font=ctk.CTkFont(weight="bold")).grid(row=0, column=0, columnspan=6, pady=(5,0))
         ctk.CTkLabel(
             proxy_frame,
             text="желательно российский (для Avito)",
             text_color="gray",
             font=ctk.CTkFont(size=11),
-        ).grid(row=0, column=0, columnspan=7, sticky="e", padx=10)
+        ).grid(row=1, column=0, columnspan=6, pady=(0, 5))
 
-        ctk.CTkLabel(proxy_frame, text="Тип:").grid(row=1, column=0, sticky="w", pady=2, padx=5)
+        ctk.CTkLabel(proxy_frame, text="Тип:").grid(row=2, column=0, sticky="e", pady=2, padx=5)
         self.proxy_scheme_var = tk.StringVar(value="http")
         self.proxy_scheme_combo = ctk.CTkComboBox(proxy_frame, variable=self.proxy_scheme_var,
                                                 values=["http", "socks5"], width=80, state="readonly")
-        self.proxy_scheme_combo.grid(row=1, column=1, padx=5, sticky="w")
+        self.proxy_scheme_combo.grid(row=2, column=1, padx=5, sticky="w")
 
-        ctk.CTkLabel(proxy_frame, text="Хост:").grid(row=1, column=2, sticky="w", padx=(20, 0))
-        self.proxy_host_entry = ctk.CTkEntry(proxy_frame, width=20*8)
-        self.proxy_host_entry.grid(row=1, column=3, padx=5)
+        ctk.CTkLabel(proxy_frame, text="Хост:").grid(row=2, column=2, sticky="e", padx=(20, 0))
+        self.proxy_host_entry = ctk.CTkEntry(proxy_frame)
+        self.proxy_host_entry.grid(row=2, column=3, padx=5, sticky="ew")
 
-        ctk.CTkLabel(proxy_frame, text="Порт:").grid(row=1, column=4, sticky="w")
+        ctk.CTkLabel(proxy_frame, text="Порт:").grid(row=2, column=4, sticky="e")
         self.proxy_port_entry = ctk.CTkEntry(proxy_frame, width=8*8)
-        self.proxy_port_entry.grid(row=1, column=5, padx=5)
+        self.proxy_port_entry.grid(row=2, column=5, padx=5, sticky="w")
 
-        ctk.CTkLabel(proxy_frame, text="Логин:").grid(row=2, column=0, sticky="w", padx=5)
-        self.proxy_user_entry = ctk.CTkEntry(proxy_frame, width=20*8)
-        self.proxy_user_entry.grid(row=2, column=1, padx=5, columnspan=2, sticky="w")
+        ctk.CTkLabel(proxy_frame, text="Логин:").grid(row=3, column=0, sticky="e", padx=5, pady=2)
+        self.proxy_user_entry = ctk.CTkEntry(proxy_frame)
+        self.proxy_user_entry.grid(row=3, column=1, padx=5, columnspan=2, sticky="ew", pady=2)
 
-        ctk.CTkLabel(proxy_frame, text="Пароль:").grid(row=2, column=3, sticky="w", padx=(20, 0))
-        self.proxy_pass_entry = ctk.CTkEntry(proxy_frame, width=20*8, show="*")
-        self.proxy_pass_entry.grid(row=2, column=4, padx=5, columnspan=2, sticky="w")
+        ctk.CTkLabel(proxy_frame, text="Пароль:").grid(row=3, column=3, sticky="e", padx=(20, 0))
+        self.proxy_pass_entry = ctk.CTkEntry(proxy_frame, show="*")
+        self.proxy_pass_entry.grid(row=3, column=4, padx=5, columnspan=2, sticky="ew", pady=2)
 
         self.test_proxy_button = ctk.CTkButton(proxy_frame, text="Тест прокси", command=self.test_proxy)
-        self.test_proxy_button.grid(row=1, column=6, padx=20, rowspan=2)
+        self.test_proxy_button.grid(row=4, column=0, columnspan=6, pady=(8, 5))
 
         self.proxy_status_label = ctk.CTkLabel(proxy_frame, text="", text_color="gray")
-        self.proxy_status_label.grid(row=3, column=0, columnspan=7, sticky="w", padx=5)
+        self.proxy_status_label.grid(row=5, column=0, columnspan=6, padx=5, pady=(0, 5))
 
         telegram_frame = ctk.CTkFrame(tab_settings, border_width=1)
         telegram_frame.pack(fill="x", padx=10, pady=5)
@@ -277,44 +278,48 @@ class ParserApp:
 
         # Отдельный прокси для Telegram
         tg_proxy_sub = ctk.CTkFrame(telegram_frame, border_width=1)
-        tg_proxy_sub.grid(row=4, column=0, columnspan=2, sticky="ew", padx=5, pady=(10, 5))
+        tg_proxy_sub.grid(row=3, column=0, columnspan=2, sticky="ew", padx=5, pady=(10, 5))
+        tg_proxy_sub.grid_columnconfigure(1, weight=1)
+        tg_proxy_sub.grid_columnconfigure(3, weight=1)
+        tg_proxy_sub.grid_columnconfigure(5, weight=1)
+
         ctk.CTkLabel(tg_proxy_sub, text="Прокси для Telegram (необязательно)", font=ctk.CTkFont(weight="bold")).grid(row=0, column=0, columnspan=6, pady=(5,0))
         ctk.CTkLabel(
             tg_proxy_sub,
             text="только зарубежный (РКН блочит api.telegram.org)",
             text_color="gray",
             font=ctk.CTkFont(size=11),
-        ).grid(row=0, column=0, columnspan=6, sticky="e", padx=10)
+        ).grid(row=1, column=0, columnspan=6, pady=(0, 5))
 
-        ctk.CTkLabel(tg_proxy_sub, text="Тип:").grid(row=1, column=0, sticky="w", pady=2, padx=5)
+        ctk.CTkLabel(tg_proxy_sub, text="Тип:").grid(row=2, column=0, sticky="e", pady=2, padx=5)
         self.tg_proxy_scheme_var = tk.StringVar(value="http")
         self.tg_proxy_scheme_combo = ctk.CTkComboBox(
             tg_proxy_sub, variable=self.tg_proxy_scheme_var,
             values=["http", "socks5"], width=80, state="readonly"
         )
-        self.tg_proxy_scheme_combo.grid(row=1, column=1, padx=5, sticky="w")
+        self.tg_proxy_scheme_combo.grid(row=2, column=1, padx=5, sticky="w")
 
-        ctk.CTkLabel(tg_proxy_sub, text="Хост:").grid(row=1, column=2, sticky="w", padx=(20, 0))
-        self.tg_proxy_host_entry = ctk.CTkEntry(tg_proxy_sub, width=20*8)
-        self.tg_proxy_host_entry.grid(row=1, column=3, padx=5)
+        ctk.CTkLabel(tg_proxy_sub, text="Хост:").grid(row=2, column=2, sticky="e", padx=(20, 0))
+        self.tg_proxy_host_entry = ctk.CTkEntry(tg_proxy_sub)
+        self.tg_proxy_host_entry.grid(row=2, column=3, padx=5, sticky="ew")
 
-        ctk.CTkLabel(tg_proxy_sub, text="Порт:").grid(row=1, column=4, sticky="w")
+        ctk.CTkLabel(tg_proxy_sub, text="Порт:").grid(row=2, column=4, sticky="e")
         self.tg_proxy_port_entry = ctk.CTkEntry(tg_proxy_sub, width=8*8)
-        self.tg_proxy_port_entry.grid(row=1, column=5, padx=5)
+        self.tg_proxy_port_entry.grid(row=2, column=5, padx=5, sticky="w")
 
-        ctk.CTkLabel(tg_proxy_sub, text="Логин:").grid(row=2, column=0, sticky="w", padx=5)
-        self.tg_proxy_user_entry = ctk.CTkEntry(tg_proxy_sub, width=20*8)
-        self.tg_proxy_user_entry.grid(row=2, column=1, padx=5, columnspan=2, sticky="w")
+        ctk.CTkLabel(tg_proxy_sub, text="Логин:").grid(row=3, column=0, sticky="e", padx=5, pady=2)
+        self.tg_proxy_user_entry = ctk.CTkEntry(tg_proxy_sub)
+        self.tg_proxy_user_entry.grid(row=3, column=1, padx=5, columnspan=2, sticky="ew", pady=2)
 
-        ctk.CTkLabel(tg_proxy_sub, text="Пароль:").grid(row=2, column=3, sticky="w", padx=(20, 0))
-        self.tg_proxy_pass_entry = ctk.CTkEntry(tg_proxy_sub, width=20*8, show="*")
-        self.tg_proxy_pass_entry.grid(row=2, column=4, padx=5, columnspan=2, sticky="w")
+        ctk.CTkLabel(tg_proxy_sub, text="Пароль:").grid(row=3, column=3, sticky="e", padx=(20, 0))
+        self.tg_proxy_pass_entry = ctk.CTkEntry(tg_proxy_sub, show="*")
+        self.tg_proxy_pass_entry.grid(row=3, column=4, padx=5, columnspan=2, sticky="ew", pady=2)
 
-        self.test_telegram_button = ctk.CTkButton(telegram_frame, text="Тест", command=self.test_telegram)
-        self.test_telegram_button.grid(row=3, column=1, padx=5, pady=5, sticky="w")
+        self.test_telegram_button = ctk.CTkButton(tg_proxy_sub, text="Тест прокси (Telegram)", command=self.test_telegram)
+        self.test_telegram_button.grid(row=4, column=0, columnspan=6, pady=(8, 5))
 
         self.telegram_status_label = ctk.CTkLabel(telegram_frame, text="", text_color="gray")
-        self.telegram_status_label.grid(row=3, column=0, columnspan=2, sticky="w", padx=5)
+        self.telegram_status_label.grid(row=4, column=0, columnspan=2, padx=5, pady=(5, 5))
 
         # Уведомления о статусе парсера
         ctk.CTkLabel(telegram_frame, text="Уведомления о статусе:").grid(row=5, column=0, sticky="w", pady=(10, 2), padx=5)
@@ -1664,6 +1669,7 @@ yR1ByZ:paNHYV8EM7su - до двоеточия логин, после - паро�
             for item in visible_items:
                 card = ctk.CTkFrame(self.results_frame, border_width=1)
                 card.pack(fill="x", padx=5, pady=5)
+                card.grid_columnconfigure(1, weight=1)
 
                 state = {"hover_handled": False, "is_new": item.get("is_new", False)}
 
@@ -1689,7 +1695,7 @@ yR1ByZ:paNHYV8EM7su - до двоеточия логин, после - паро�
                 card.bind("<Leave>", on_leave, add="+")
 
                 header = ctk.CTkFrame(card, fg_color="transparent")
-                header.grid(row=0, column=0, columnspan=2, sticky="w", pady=5)
+                header.grid(row=0, column=0, columnspan=2, sticky="ew", pady=5)
 
                 fav_btn = ctk.CTkButton(
                     header,
@@ -1698,7 +1704,7 @@ yR1ByZ:paNHYV8EM7su - до двоеточия логин, после - паро�
                     command=lambda _it=item: self.toggle_favorite(_it),
                 )
                 fav_btn.pack(side="left", padx=(5, 5))
-                ctk.CTkLabel(header, text=item['title'], font=ctk.CTkFont(size=12, weight='bold')).pack(side="left")
+                ctk.CTkLabel(header, text=item['title'], font=ctk.CTkFont(size=14, weight='bold')).pack(side="left")
 
                 img_label = ctk.CTkLabel(card, text="")
                 img_label.grid(row=1, column=0, rowspan=5, padx=5, pady=5, sticky="n")
@@ -1711,24 +1717,25 @@ yR1ByZ:paNHYV8EM7su - до двоеточия логин, после - паро�
                     img_label.configure(text="[нет фото]")
 
                 price_frame = ctk.CTkFrame(card, fg_color="transparent")
-                price_frame.grid(row=1, column=1, sticky="w")
-                ctk.CTkLabel(price_frame, text=f"Цена: {item['price']} руб.", font=ctk.CTkFont(size=10)).pack(side="left")
+                price_frame.grid(row=1, column=1, sticky="ew", padx=5)
+                ctk.CTkLabel(price_frame, text=f"Цена: {item['price']} руб.", font=ctk.CTkFont(size=13)).pack(side="left")
                 if item.get("seller_rating") is not None:
                     ctk.CTkLabel(price_frame, text=f"  ★ {item['seller_rating']:.1f}",
-                              font=ctk.CTkFont(size=10), text_color="#c68a00").pack(side="left", padx=(10, 0))
+                              font=ctk.CTkFont(size=13), text_color="#c68a00").pack(side="left", padx=(10, 0))
 
-                desc = ctk.CTkTextbox(card, height=80, wrap="word", font=ctk.CTkFont(size=10))
+                desc = ctk.CTkTextbox(card, height=100, wrap="word", font=ctk.CTkFont(size=13))
                 desc.insert("1.0", item['description'])
                 desc.configure(state='disabled')
-                desc.grid(row=2, column=1, sticky="w", pady=5, padx=5)
+                desc.grid(row=2, column=1, sticky="ew", pady=5, padx=5)
 
                 first_seen = item.get("first_seen", "Н/Д")
-                ctk.CTkLabel(card, text=f"Время добавления в программу: {first_seen}", font=ctk.CTkFont(size=8)).grid(row=3,
+                ctk.CTkLabel(card, text=f"Время добавления в программу: {first_seen}", font=ctk.CTkFont(size=13)).grid(row=3,
                                                                                                               column=1,
                                                                                                               sticky="w", padx=5)
 
-                link_label = ctk.CTkLabel(card, text="Открыть объявление", text_color="#4a9eff", cursor="hand2")
-                link_label.grid(row=4, column=1, sticky="w", padx=5)
+                link_label = ctk.CTkLabel(card, text="Открыть объявление", text_color="#4a9eff", cursor="hand2",
+                                          font=ctk.CTkFont(size=13))
+                link_label.grid(row=4, column=1, sticky="w", padx=5, pady=(5, 15))
                 link_label.bind("<Button-1>", lambda e, url=item['link']: webbrowser.open(url))
 
             self.results_frame.update_idletasks()
