@@ -437,11 +437,11 @@ class ParserApp:
         profiles_buttons = ctk.CTkFrame(profiles_right)
         profiles_buttons.grid(row=10, column=0, columnspan=2, pady=10, sticky="w")
 
+        ctk.CTkButton(profiles_buttons, text="📥 Загрузить в поиск", command=self.profile_load_to_search).pack(side="left", padx=2)
         ctk.CTkButton(profiles_buttons, text="➕ Новый", command=self.profile_new).pack(side="left", padx=2)
         ctk.CTkButton(profiles_buttons, text="💾 Сохранить", command=self.profile_save).pack(side="left", padx=2)
         ctk.CTkButton(profiles_buttons, text="🗑 Удалить", command=self.profile_delete).pack(side="left", padx=2)
         ctk.CTkButton(profiles_buttons, text="✔ Сделать активным", command=self.profile_set_active).pack(side="left", padx=2)
-        ctk.CTkButton(profiles_buttons, text="📥 Загрузить в поиск", command=self.profile_load_to_search).pack(side="left", padx=2)
 
         self.profile_status_label = ctk.CTkLabel(profiles_right, text="", text_color="gray")
         self.profile_status_label.grid(row=11, column=0, columnspan=2, sticky="w", padx=5, pady=(10, 0))
