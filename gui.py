@@ -13,7 +13,7 @@ import json
 import traceback
 from io import BytesIO
 from concurrent.futures import ThreadPoolExecutor
-from PIL import Image, ImageTk
+from PIL import Image
 
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
@@ -1623,9 +1623,10 @@ yR1ByZ:paNHYV8EM7su - до двоеточия логин, после - паро�
 
     def _set_image(self, pil_image, img_label):
         try:
-            photo = ImageTk.PhotoImage(pil_image)
+            size = pil_image.size
+            photo = ctk.CTkImage(light_image=pil_image, dark_image=pil_image, size=size)
             self.images.append(photo)
-            img_label.configure(image=photo)
+            img_label.configure(image=photo, text="")
         except Exception:
             pass
 
