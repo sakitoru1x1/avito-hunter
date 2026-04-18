@@ -1,6 +1,8 @@
-# Avito News Parser
+# Avito Hunter S. 🎯
 
 Программа для автоматического мониторинга объявлений на Avito. Задаёшь запрос и город - программа сама обновляет список каждые N минут и шлёт новые объявления в Telegram. Удобно, когда ищешь что-то конкретное (например, б/у iPhone в своём городе) и не хочешь каждый час обновлять страницу вручную.
+
+*Avito Hunter S. - легаси-версия на Selenium (буква «S» от Selenium). Разработка заморожена, новые фичи только в Avito Hunter P. (Playwright): https://github.com/sakitoru1x1/avito-hunter-p*
 
 *Инструкция рассчитана на людей без опыта с кодом. Если что-то непонятно - читай внимательно, не пропускай шаги.*
 
@@ -52,12 +54,12 @@
 2. В этой папке щёлкни правой кнопкой в пустое место → «Открыть в терминале» (или «Open Git Bash here»).
 3. Введи команду:
    ```
-   git clone https://github.com/sakitoru1x1/avito-news-parser
+   git clone https://github.com/sakitoru1x1/avito-hunter-s
    ```
-   Появится папка `avito-news-parser`.
+   Появится папка `avito-hunter-s`.
 4. Зайди в неё:
    ```
-   cd avito-news-parser
+   cd avito-hunter-s
    ```
 5. Поставь все нужные библиотеки (это делается один раз):
    ```
@@ -219,6 +221,6 @@ python main.py
 
 ## Проблемы и баги
 
-Если что-то не работает - открой Issue на GitHub: https://github.com/sakitoru1x1/avito-news-parser/issues
+Если что-то не работает - открой Issue на GitHub: https://github.com/sakitoru1x1/avito-hunter-s/issues
 
 Приложи лог из `parser.log` и опиши что именно не работает.
