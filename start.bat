@@ -6,6 +6,15 @@ if %errorlevel%==0 (
     set PY=python
 )
 
+where git >NUL 2>&1
+if %errorlevel%==0 (
+    if exist ".git" (
+        echo Updating from GitHub...
+        git pull --ff-only
+        echo.
+    )
+)
+
 echo Installing dependencies...
 %PY% -m pip install -r requirements.txt
 if errorlevel 1 (
