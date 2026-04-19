@@ -1,4 +1,19 @@
 @echo off
-git pull
-python main.py
+where py >NUL 2>&1
+if %errorlevel%==0 (
+    set PY=py
+) else (
+    set PY=python
+)
+
+echo Installing dependencies...
+%PY% -m pip install -r requirements.txt
+if errorlevel 1 (
+    echo Trying pip directly...
+    pip install -r requirements.txt
+)
+
+echo.
+echo Starting...
+%PY% main.py
 pause
