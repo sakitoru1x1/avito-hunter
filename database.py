@@ -55,6 +55,8 @@ def get_conn():
     conn = sqlite3.connect(DB_FILE)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
+    conn.execute("PRAGMA journal_mode = WAL")
+    conn.execute("PRAGMA synchronous = NORMAL")
     try:
         yield conn
         conn.commit()
@@ -120,66 +122,74 @@ def count_ads():
         return cur.fetchone()[0]
 
 
-def upsert_ad(item, search_query=None):
-    """Вставляет или обновляет объявление. Пишет в price_history при изменении цены."""
+def _upsert_ad_conn(conn, item, search_query=None):
+    """Вставляет/обновляет объявление в рамках переданного соединения. True = новое."""
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    with get_conn() as conn:
-        cur = conn.execute("SELECT price, first_seen FROM ads WHERE id = ?", (item["id"],))
-        existing = cur.fetchone()
+    cur = conn.execute("SELECT price, first_seen FROM ads WHERE id = ?", (item["id"],))
+    existing = cur.fetchone()
 
-        if existing is None:
-            first_seen = item.get("first_seen") or now
+    if existing is None:
+        first_seen = item.get("first_seen") or now
+        conn.execute(
+            """INSERT INTO ads (id, title, price, link, image_url, description, date,
+                                pub_date_timestamp, search_query, first_seen, last_seen, is_active,
+                                seller_rating)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)""",
+            (
+                item["id"], item.get("title"), item.get("price"), item.get("link"),
+                item.get("image_url"), item.get("description"), item.get("date"),
+                item.get("pub_date_timestamp") or 0,
+                item.get("search_query") or search_query,
+                first_seen, now,
+                item.get("seller_rating"),
+            ),
+        )
+        if item.get("price") is not None:
             conn.execute(
-                """INSERT INTO ads (id, title, price, link, image_url, description, date,
-                                    pub_date_timestamp, search_query, first_seen, last_seen, is_active,
-                                    seller_rating)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)""",
-                (
-                    item["id"], item.get("title"), item.get("price"), item.get("link"),
-                    item.get("image_url"), item.get("description"), item.get("date"),
-                    item.get("pub_date_timestamp") or 0,
-                    item.get("search_query") or search_query,
-                    first_seen, now,
-                    item.get("seller_rating"),
-                ),
+                "INSERT INTO price_history (ad_id, price, timestamp) VALUES (?, ?, ?)",
+                (item["id"], item["price"], now),
             )
-            if item.get("price") is not None:
-                conn.execute(
-                    "INSERT INTO price_history (ad_id, price, timestamp) VALUES (?, ?, ?)",
-                    (item["id"], item["price"], now),
-                )
-            return True
-        else:
-            old_price = existing["price"]
+        return True
+    else:
+        old_price = existing["price"]
+        conn.execute(
+            """UPDATE ads SET title=?, price=?, link=?, image_url=?, description=?,
+                              date=?, pub_date_timestamp=?, search_query=COALESCE(?, search_query),
+                              last_seen=?, is_active=1,
+                              seller_rating=COALESCE(?, seller_rating)
+               WHERE id=?""",
+            (
+                item.get("title"), item.get("price"), item.get("link"),
+                item.get("image_url"), item.get("description"), item.get("date"),
+                item.get("pub_date_timestamp") or 0,
+                item.get("search_query") or search_query,
+                now, item.get("seller_rating"),
+                item["id"],
+            ),
+        )
+        if item.get("price") is not None and item["price"] != old_price:
             conn.execute(
-                """UPDATE ads SET title=?, price=?, link=?, image_url=?, description=?,
-                                  date=?, pub_date_timestamp=?, search_query=COALESCE(?, search_query),
-                                  last_seen=?, is_active=1,
-                                  seller_rating=COALESCE(?, seller_rating)
-                   WHERE id=?""",
-                (
-                    item.get("title"), item.get("price"), item.get("link"),
-                    item.get("image_url"), item.get("description"), item.get("date"),
-                    item.get("pub_date_timestamp") or 0,
-                    item.get("search_query") or search_query,
-                    now, item.get("seller_rating"),
-                    item["id"],
-                ),
+                "INSERT INTO price_history (ad_id, price, timestamp) VALUES (?, ?, ?)",
+                (item["id"], item["price"], now),
             )
-            if item.get("price") is not None and item["price"] != old_price:
-                conn.execute(
-                    "INSERT INTO price_history (ad_id, price, timestamp) VALUES (?, ?, ?)",
-                    (item["id"], item["price"], now),
-                )
-            return False
+        return False
+
+
+def upsert_ad(item, search_query=None):
+    """Публичный API: открывает своё соединение и делает upsert."""
+    with get_conn() as conn:
+        return _upsert_ad_conn(conn, item, search_query)
 
 
 def save_ads(items, search_query=None):
-    """Массовая запись. Возвращает кол-во вставленных (новых)."""
+    """Массовая запись в одной транзакции. Возвращает кол-во вставленных (новых)."""
+    if not items:
+        return 0
     inserted = 0
-    for item in items:
-        if upsert_ad(item, search_query):
-            inserted += 1
+    with get_conn() as conn:
+        for item in items:
+            if _upsert_ad_conn(conn, item, search_query):
+                inserted += 1
     return inserted
 
 
