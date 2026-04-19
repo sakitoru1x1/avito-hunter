@@ -4,7 +4,7 @@ DATA_FILE = "avito_history.json"
 BACKUP_FILE = "avito_history_backup.json"
 DB_FILE = "avito_data.db"
 SETTINGS_FILE = "settings.json"
-DEFAULT_MAX_ITEMS = 50
+DEFAULT_MAX_ITEMS = 500
 
 LOG_FILE = "app.log"
 MAX_LOG_SIZE = 10 * 1024 * 1024  # 10 MB
