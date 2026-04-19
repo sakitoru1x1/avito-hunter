@@ -1866,7 +1866,7 @@ yR1ByZ:paNHYV8EM7su - до двоеточия логин, после - паро�
             if not img_label.winfo_exists():
                 return
             img_label.configure(text="📷 Открыть фото", text_color="#4a9eff", cursor="hand2")
-            img_label.bind("<Button-1>", lambda e, u=url: webbrowser.open(u))
+            img_label.bind("<Button-1>", lambda e=None, u=url: webbrowser.open(u))
         except Exception:
             pass
 
@@ -1962,7 +1962,7 @@ yR1ByZ:paNHYV8EM7su - до двоеточия логин, после - паро�
                 link_label = ctk.CTkLabel(card, text="Открыть объявление", text_color="#4a9eff", cursor="hand2",
                                           font=ctk.CTkFont(size=13))
                 link_label.grid(row=4, column=1, sticky="w", padx=5, pady=(5, 15))
-                link_label.bind("<Button-1>", lambda e, url=item['link']: webbrowser.open(url))
+                link_label.bind("<Button-1>", lambda e=None, url=item['link']: webbrowser.open(url))
 
             self.results_frame.update_idletasks()
             self.canvas.configure(scrollregion=self.canvas.bbox("all"))
