@@ -169,6 +169,11 @@ class ParserApp:
         self.auto_button.pack(side="left", padx=2)
         self.stop_button = ctk.CTkButton(row5, text="⏹ Стоп", command=self.stop_parsing_handler, state='disabled')
         self.stop_button.pack(side="left", padx=2)
+        self.kill_button = ctk.CTkButton(
+            row5, text="⏹⏹ Убить", fg_color="#7a2a2a", hover_color="#a03030",
+            command=self.hard_stop_handler, state='disabled', width=90,
+        )
+        self.kill_button.pack(side="left", padx=2)
 
         row5b = ctk.CTkFrame(search_right)
         row5b.pack(fill="x", pady=2)
@@ -1149,6 +1154,7 @@ yR1ByZ:paNHYV8EM7su - до двоеточия логин, после - паро�
             self.start_button.configure(state='normal')
             if not self.auto_update:
                 self.stop_button.configure(state='disabled')
+                self.kill_button.configure(state='disabled')
             if self.auto_update:
                 self.root.after(100, self.schedule_next_auto)
             return
@@ -1160,6 +1166,7 @@ yR1ByZ:paNHYV8EM7su - до двоеточия логин, после - паро�
             self.progress.stop()
             self.start_button.configure(state='normal')
             self.stop_button.configure(state='disabled')
+            self.kill_button.configure(state='disabled')
             return
 
         driver = self.driver_manager.driver
@@ -1439,6 +1446,11 @@ yR1ByZ:paNHYV8EM7su - до двоеточия логин, после - паро�
             )
 
         except Exception as e:
+            if self.stop_parsing:
+                # Жёсткий стоп: драйвер убит извне, Selenium кинул exception.
+                # Не спамим логи и Telegram.
+                logger.info(f"Парсер остановлен (жёсткий стоп): {type(e).__name__}")
+                return
             error_trace = traceback.format_exc()
             user_msg = format_user_error(e, context="parser")
             self.log(user_msg)
@@ -1472,6 +1484,7 @@ yR1ByZ:paNHYV8EM7su - до двоеточия логин, после - паро�
             self.start_button.configure(state='normal')
             if not self.auto_update:
                 self.stop_button.configure(state='disabled')
+                self.kill_button.configure(state='disabled')
             if self.auto_update:
                 self.root.after(100, self.schedule_next_auto)
 
@@ -2310,6 +2323,7 @@ yR1ByZ:paNHYV8EM7su - до двоеточия логин, после - паро�
         self.stop_parsing = False
         self.start_button.configure(state='disabled')
         self.stop_button.configure(state='normal')
+        self.kill_button.configure(state='normal')
         self.progress.start()
         self.log("Ручной парсинг...")
         self.set_status(f"🔍 Ищем: {query}")
@@ -2329,6 +2343,7 @@ yR1ByZ:paNHYV8EM7su - до двоеточия логин, после - паро�
             self.auto_update = True
             self.auto_button.configure(text="Автообновление вкл", state='disabled')
             self.stop_button.configure(state='normal')
+            self.kill_button.configure(state='normal')
             self.log("Автообновление запущено")
             self.run_auto_parsing()
         else:
@@ -2339,6 +2354,7 @@ yR1ByZ:paNHYV8EM7su - до двоеточия логин, после - паро�
         self.auto_button.configure(text="Автообновление", state='normal')
         if not self.driver_manager.driver or not self.stop_parsing:
             self.stop_button.configure(state='disabled')
+            self.kill_button.configure(state='disabled')
         self.log("Автообновление остановлено")
 
     def stop_parsing_handler(self):
@@ -2347,6 +2363,28 @@ yR1ByZ:paNHYV8EM7su - до двоеточия логин, после - паро�
         self.log("⏹️ Запрос на остановку парсинга отправлен")
         self.send_tg_status("⏹️ Парсер остановлен")
         self.set_status("⏹ Остановлено")
+
+    def hard_stop_handler(self):
+        """Жёсткая остановка: убиваем драйвер, поток падает с exception,
+        который глушится в run_parser по флагу stop_parsing."""
+        self.stop_parsing = True
+        self.auto_update = False
+        self.auto_button.configure(text="Автообновление", state='normal')
+        self.log("⏹⏹ Жёсткая остановка, убиваем браузер...")
+        self.send_tg_status("⏹⏹ Парсер жёстко остановлен")
+        self.set_status("⏹⏹ Убито")
+        # cleanup может подвиснуть на секунду-другую - в отдельном потоке
+        threading.Thread(target=self._hard_stop_cleanup, daemon=True).start()
+
+    def _hard_stop_cleanup(self):
+        try:
+            self.driver_manager.cleanup()
+        except Exception as e:
+            logger.error(f"Ошибка при жёстком стопе: {e}")
+        self.root.after(0, lambda: self.stop_button.configure(state='disabled'))
+        self.root.after(0, lambda: self.kill_button.configure(state='disabled'))
+        self.root.after(0, lambda: self.start_button.configure(state='normal'))
+        self.root.after(0, self.progress.stop)
 
     def run_auto_parsing(self):
         if not self.auto_update:
