@@ -126,7 +126,19 @@ def format_user_error(exc, context=None):
         str - многострочное сообщение для self.log или статуса.
     """
     # --- Selenium / Chrome ---
+    # ВАЖНО: TimeoutException и NoSuchElementException - подклассы WebDriverException,
+    # поэтому их проверяем первыми.
     if _SELENIUM_AVAILABLE:
+        if isinstance(exc, TimeoutException):
+            if context == "driver":
+                return "⏱ Страница не загрузилась вовремя. Проверьте интернет или попробуйте позже."
+            if context == "parser":
+                return "⏱ Карточки не появились на странице. Возможно, Авито показывает капчу или блокирует."
+            return "⏱ Превышено время ожидания."
+        if isinstance(exc, NoSuchElementException):
+            if context == "parser":
+                return f"⚠️ Не найден ожидаемый элемент на странице. {LAYOUT_CHANGED_HINT}"
+            return f"⚠️ Элемент не найден: {_first_line(exc)}"
         if isinstance(exc, WebDriverException):
             if _is_chrome_missing(exc):
                 return f"❌ Chrome не найден. {CHROME_INSTALL_HINT}"
@@ -138,16 +150,6 @@ def format_user_error(exc, context=None):
                 f"❌ Ошибка браузера: {_first_line(exc)}. "
                 f"{CHROME_INSTALL_HINT}"
             )
-        if isinstance(exc, TimeoutException):
-            if context == "driver":
-                return "⏱ Страница не загрузилась вовремя. Проверьте интернет или попробуйте позже."
-            if context == "parser":
-                return "⏱ Карточки не появились на странице. Возможно, Авито показывает капчу или блокирует."
-            return "⏱ Превышено время ожидания."
-        if isinstance(exc, NoSuchElementException):
-            if context == "parser":
-                return f"⚠️ Не найден ожидаемый элемент на странице. {LAYOUT_CHANGED_HINT}"
-            return f"⚠️ Элемент не найден: {_first_line(exc)}"
 
     # --- Network ---
     if _REQUESTS_AVAILABLE:
