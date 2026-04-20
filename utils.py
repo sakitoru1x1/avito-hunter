@@ -79,6 +79,9 @@ def parse_date_to_timestamp(date_str):
         return 0
     now = datetime.now()
     date_str = date_str.lower().strip()
+    date_str = re.sub(r'\s+в\s+', ' ', date_str)
+    date_str = re.sub(r'\s*·\s*', ' ', date_str)
+    date_str = re.sub(r'\s+', ' ', date_str).strip()
 
     if date_str.startswith("сегодня"):
         parts = date_str.split()
@@ -109,13 +112,15 @@ def parse_date_to_timestamp(date_str):
         'января': 1, 'февраля': 2, 'марта': 3, 'апреля': 4, 'мая': 5, 'июня': 6,
         'июля': 7, 'августа': 8, 'сентября': 9, 'октября': 10, 'ноября': 11, 'декабря': 12
     }
-    pattern = r'(\d+)\s+(' + '|'.join(months.keys()) + r')(?:\s+(\d+))?'
+    pattern = r'(\d+)\s+(' + '|'.join(months.keys()) + r')(?:\s+(\d{4}))?(?:\s+(\d{1,2}):(\d{2}))?'
     match = re.search(pattern, date_str)
     if match:
         day = int(match.group(1))
         month = months[match.group(2)]
         year = int(match.group(3)) if match.group(3) else now.year
-        dt = datetime(year, month, day)
+        hour = int(match.group(4)) if match.group(4) else 0
+        minute = int(match.group(5)) if match.group(5) else 0
+        dt = datetime(year, month, day, hour, minute)
         if dt > now:
             dt = dt.replace(year=year - 1)
         return int(dt.timestamp())

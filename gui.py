@@ -11,6 +11,7 @@ import os
 import sys
 import json
 import traceback
+from datetime import datetime
 from io import BytesIO
 from concurrent.futures import ThreadPoolExecutor
 from PIL import Image
@@ -220,6 +221,22 @@ class ParserApp:
             variable=self.favorites_only_var,
             command=self.display_results,
         ).pack(side="left", padx=5)
+
+        # Баннер "Новые объявления" с кнопкой перехода к следующему
+        self._new_banner_frame = ctk.CTkFrame(bottom_frame, fg_color="#5a1e1e", height=36)
+        self._new_banner_label = ctk.CTkLabel(
+            self._new_banner_frame, text="", font=ctk.CTkFont(size=13, weight="bold")
+        )
+        self._new_banner_label.pack(side="left", padx=10)
+        ctk.CTkButton(
+            self._new_banner_frame, text="→ Следующее", width=120,
+            command=self._jump_to_next_new,
+        ).pack(side="left", padx=5, pady=4)
+        ctk.CTkButton(
+            self._new_banner_frame, text="✕", width=30, fg_color="#7a2a2a",
+            command=self._hide_new_banner,
+        ).pack(side="right", padx=5, pady=4)
+        self._new_jump_cursor = 0
 
         self.canvas = tk.Canvas(bottom_frame, borderwidth=0, highlightthickness=0, bg=ctk.ThemeManager.theme["CTkFrame"]["fg_color"][1])
         self.scrollbar = tk.Scrollbar(bottom_frame, orient="vertical", command=self.canvas.yview)
@@ -1602,6 +1619,71 @@ yR1ByZ:paNHYV8EM7su - до двоеточия логин, после - паро�
             logger.warning(f"Batch image extraction failed: {e}")
             return {}
 
+    def _fetch_detail_pages_batch(self, id_link_pairs):
+        """Параллельно забирает дату и полное описание со страниц объявлений.
+
+        Авито убрал дату с листинга, а описание в ленте обрезано многоточием.
+        Один HTTP-запрос на страницу закрывает обе задачи. Ходим через
+        driver.execute_async_script с fetch() - наследуем cookies/прокси Selenium.
+
+        Args:
+            id_link_pairs: list[(item_id, link)]
+
+        Returns:
+            dict {item_id: {"date": str|None, "description": str|None}}.
+        """
+        if not id_link_pairs:
+            return {}
+        driver = self.driver_manager.driver
+        if not driver:
+            return {}
+        js = r"""
+        const pairs = arguments[0];
+        const done = arguments[arguments.length - 1];
+        (async () => {
+            const strip = (s) => s
+                .replace(/<!--[\s\S]*?-->/g, '')
+                .replace(/<br\s*\/?>/gi, '\n')
+                .replace(/<\/p>/gi, '\n')
+                .replace(/<[^>]+>/g, '')
+                .replace(/&nbsp;/g, ' ')
+                .replace(/&amp;/g, '&')
+                .replace(/&lt;/g, '<')
+                .replace(/&gt;/g, '>')
+                .replace(/&quot;/g, '"')
+                .replace(/·/g, ' ')
+                .replace(/[ \t]+/g, ' ')
+                .replace(/\n{3,}/g, '\n\n')
+                .trim();
+            const fetchOne = async ([id, url]) => {
+                try {
+                    const r = await fetch(url, {credentials: 'include'});
+                    if (!r.ok) return [id, null];
+                    const html = await r.text();
+                    const dm = html.match(/data-marker="item-view\/item-date"[^>]*>([\s\S]*?)<\/span>/);
+                    const desc_m = html.match(/data-marker="item-view\/item-description"[^>]*>([\s\S]*?)<\/div>\s*<\/div>/)
+                        || html.match(/data-marker="item-view\/item-description"[^>]*>([\s\S]*?)<\/div>/);
+                    const date_text = dm ? strip(dm[1]).replace(/\s+/g, ' ') : null;
+                    const desc_text = desc_m ? strip(desc_m[1]) : null;
+                    return [id, {date: date_text, description: desc_text}];
+                } catch (e) {
+                    return [id, null];
+                }
+            };
+            const results = await Promise.all(pairs.map(fetchOne));
+            const out = {};
+            for (const [id, data] of results) if (data) out[id] = data;
+            done(out);
+        })();
+        """
+        try:
+            driver.set_script_timeout(60)
+            result = driver.execute_async_script(js, id_link_pairs)
+            return result or {}
+        except Exception as e:
+            logger.warning(f"Batch fetch детальных страниц не удался: {e}")
+            return {}
+
     def parse_items(self, items, min_price, max_price):
         """Двухпроходный парсер.
 
@@ -1761,6 +1843,36 @@ yR1ByZ:paNHYV8EM7su - до двоеточия логин, после - паро�
                 self.log(f"❌ Исключение при обработке карточки: {e}")
                 logger.error(f"Ошибка при парсинге элемента: {e}")
                 continue
+
+        # Точное время публикации + полное описание - ходим на страницу каждого
+        # нового объявления через fetch() внутри браузера (batch+parallel, с куками/прокси).
+        id_link_pairs = [[r["id"], r["link"]] for r in result if r.get("link") and r["link"] != "Н/Д"]
+        if id_link_pairs:
+            self.log(f"🕐 Получаю детали (дата + полное описание) для {len(id_link_pairs)} объявлений...")
+            details = self._fetch_detail_pages_batch(id_link_pairs)
+            got_date = 0
+            got_desc = 0
+            summary_by_id = {s["id"]: s for s in page_summary}
+            for r in result:
+                d = details.get(r["id"])
+                if not d:
+                    continue
+                date_text = d.get("date")
+                desc_text = d.get("description")
+                if date_text:
+                    ts = parse_date_to_timestamp(date_text)
+                    if ts > 0:
+                        r["date"] = date_text
+                        r["pub_date_timestamp"] = ts
+                        s = summary_by_id.get(r["id"])
+                        if s:
+                            s["pub_date_timestamp"] = ts
+                        got_date += 1
+                if desc_text and len(desc_text) > 10:
+                    r["description"] = desc_text
+                    got_desc += 1
+            self.log(f"   ✓ дата: {got_date}/{len(id_link_pairs)}, описание: {got_desc}/{len(id_link_pairs)}")
+
         return result, page_summary
 
     # ---------- Данные ----------
@@ -1821,6 +1933,9 @@ yR1ByZ:paNHYV8EM7su - до двоеточия логин, после - паро�
         if not new_items:
             return
 
+        # Сортируем по возрастанию: сначала шлём старые, самое свежее - последним сообщением
+        new_items.sort(key=lambda x: x.get("pub_date_timestamp", 0) or 0)
+
         self.telegram_notifier.send_message(
             f"<b>🔔 Найдено новых объявлений: {len(new_items)}</b>"
         )
@@ -1838,15 +1953,25 @@ yR1ByZ:paNHYV8EM7su - до двоеточия логин, после - паро�
             'Referer': 'https://www.avito.ru/',
         })
 
+        def _esc(s):
+            return (str(s).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"))
+
         for item in new_items:
-            caption = f"<a href='{item['link']}'>{item['title']}</a>\n"
-            caption += f"💰 {item['price']} руб.\n"
-            caption += f"🕒 {item.get('first_seen', 'Н/Д')}\n"
+            caption = f"<a href='{_esc(item['link'])}'>{_esc(item['title'])}</a>\n"
+            caption += f"💰 {_esc(item['price'])} руб.\n"
+            pub_ts = item.get("pub_date_timestamp", 0) or 0
+            if pub_ts > 0:
+                pub_str = datetime.fromtimestamp(pub_ts).strftime("%d.%m.%Y %H:%M")
+            else:
+                pub_str = item.get("date", "Н/Д")
+            caption += f"🕐 На Авито: {_esc(pub_str)}\n"
+            caption += f"📥 В программе: {_esc(item.get('first_seen', 'Н/Д'))}\n"
+
             desc = item.get('description', '')
             if desc and desc != "Н/Д":
-                if len(desc) > 400:
-                    desc = desc[:400] + "..."
-                caption += f"📝 {desc}"
+                if len(desc) > 700:
+                    desc = desc[:700] + "..."
+                caption += f"<blockquote>{_esc(desc)}</blockquote>"
 
             img = item.get('image_url')
             photo_bytes = None
@@ -2058,14 +2183,23 @@ yR1ByZ:paNHYV8EM7su - до двоеточия логин, после - паро�
         desc.configure(state='disabled')
         desc.grid(row=2, column=1, sticky="ew", pady=5, padx=5)
 
+        pub_ts = item.get("pub_date_timestamp", 0) or 0
+        if pub_ts > 0:
+            pub_str = datetime.fromtimestamp(pub_ts).strftime("%d.%m.%Y %H:%M")
+        else:
+            pub_str = item.get("date", "Н/Д")
+        ctk.CTkLabel(card, text=f"🕐 На Авито: {pub_str}", font=ctk.CTkFont(size=13)).grid(
+            row=3, column=1, sticky="w", padx=5
+        )
+
         first_seen = item.get("first_seen", "Н/Д")
-        ctk.CTkLabel(card, text=f"Время добавления в программу: {first_seen}", font=ctk.CTkFont(size=13)).grid(row=3,
-                                                                                                      column=1,
-                                                                                                      sticky="w", padx=5)
+        ctk.CTkLabel(card, text=f"📥 В программе: {first_seen}", font=ctk.CTkFont(size=13)).grid(
+            row=4, column=1, sticky="w", padx=5
+        )
 
         link_label = ctk.CTkLabel(card, text="Открыть объявление", text_color="#4a9eff", cursor="hand2",
                                   font=ctk.CTkFont(size=13))
-        link_label.grid(row=4, column=1, sticky="w", padx=5, pady=(5, 15))
+        link_label.grid(row=5, column=1, sticky="w", padx=5, pady=(5, 15))
         link_label.bind("<Button-1>", lambda e=None, url=item['link']: webbrowser.open(url))
 
         return {"card": card, "state": state, "get_color": get_card_color}
@@ -2094,6 +2228,7 @@ yR1ByZ:paNHYV8EM7su - до двоеточия логин, после - паро�
                             info["card"].configure(fg_color=info["get_color"]())
                         except Exception:
                             pass
+                self._refresh_new_banner(visible_items)
                 return
 
             # Slow path: полная перестройка.
@@ -2114,9 +2249,57 @@ yR1ByZ:paNHYV8EM7su - до двоеточия логин, после - паро�
 
             self.results_frame.update_idletasks()
             self.canvas.configure(scrollregion=self.canvas.bbox("all"))
+            self._refresh_new_banner(visible_items)
         except Exception as e:
             self.log(f"Ошибка отображения: {e}")
             logger.error(f"Ошибка отображения: {traceback.format_exc()}")
+
+    def _refresh_new_banner(self, visible_items):
+        count = sum(1 for it in visible_items if it.get("is_new"))
+        if count <= 0:
+            self._hide_new_banner()
+            return
+        self._new_banner_label.configure(text=f"🔔 Новых объявлений: {count}")
+        self._new_jump_cursor = 0
+        try:
+            self._new_banner_frame.pack(fill="x", before=self.canvas, padx=5, pady=(0, 5))
+        except Exception:
+            self._new_banner_frame.pack(fill="x", padx=5, pady=(0, 5))
+
+    def _hide_new_banner(self):
+        try:
+            self._new_banner_frame.pack_forget()
+        except Exception:
+            pass
+
+    def _jump_to_next_new(self):
+        order = getattr(self, "_rendered_order", None) or []
+        cards = getattr(self, "_rendered_cards", None) or {}
+        items_by_id = {it["id"]: it for it in self.all_items}
+        new_ids = [id_ for id_ in order if items_by_id.get(id_, {}).get("is_new")]
+        if not new_ids:
+            self._hide_new_banner()
+            return
+        if self._new_jump_cursor >= len(new_ids):
+            self._new_jump_cursor = 0
+        target_id = new_ids[self._new_jump_cursor]
+        self._new_jump_cursor += 1
+        info = cards.get(target_id)
+        if not info:
+            return
+        card = info["card"]
+        try:
+            self.results_frame.update_idletasks()
+            bbox = self.canvas.bbox("all")
+            if not bbox:
+                return
+            total_h = bbox[3] - bbox[1]
+            card_y = card.winfo_y()
+            if total_h > 0:
+                frac = max(0.0, min(1.0, card_y / total_h))
+                self.canvas.yview_moveto(frac)
+        except Exception as e:
+            logger.warning(f"Не удалось проскроллить к новому объявлению: {e}")
 
     # ---------- Управление парсингом ----------
     def start_parsing(self):
