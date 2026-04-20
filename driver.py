@@ -83,11 +83,12 @@ chrome.webRequest.onAuthRequired.addListener(
 
         return ext_dir
 
-    def create_driver(self, proxy_settings, log_callback=None):
+    def create_driver(self, proxy_settings, log_callback=None, show_browser=False):
         """Создает новый экземпляр ChromeDriver.
 
         proxy_settings: dict с ключами scheme, host, port, user, pass
         log_callback: функция для логирования (например app.log)
+        show_browser: если True - запускаем без headless (окно видно на экране).
         """
         try:
             if self.extension_dir and os.path.exists(self.extension_dir):
@@ -104,7 +105,8 @@ chrome.webRequest.onAuthRequired.addListener(
             user_agent = random.choice(USER_AGENTS)
 
             options = Options()
-            options.add_argument('--headless=new')
+            if not show_browser:
+                options.add_argument('--headless=new')
             options.add_argument('--no-sandbox')
             options.add_argument('--disable-dev-shm-usage')
             options.add_argument('--disable-gpu')
@@ -136,17 +138,15 @@ chrome.webRequest.onAuthRequired.addListener(
             logger.error(f"Ошибка создания драйвера: {error_trace}")
             return None
 
-    def ensure_driver(self, proxy_settings, log_callback=None):
+    def ensure_driver(self, proxy_settings, log_callback=None, show_browser=False):
         """Проверяет что драйвер жив, пересоздает если нет."""
         if self.driver is None:
-            self.driver = self.create_driver(proxy_settings, log_callback)
+            self.driver = self.create_driver(proxy_settings, log_callback, show_browser=show_browser)
             return self.driver is not None
         try:
             self.driver.current_url
             return True
         except Exception:
-            # Ловим всё - WebDriverException, urllib3 MaxRetryError/NewConnectionError,
-            # ConnectionRefusedError, AttributeError. Любая ошибка при probe = драйвер мёртв.
             if log_callback:
                 log_callback("Драйвер не отвечает, пересоздаём...")
             logger.warning("Драйвер не отвечает, пересоздаём...")
@@ -154,7 +154,7 @@ chrome.webRequest.onAuthRequired.addListener(
                 self.driver.quit()
             except Exception:
                 pass
-            self.driver = self.create_driver(proxy_settings, log_callback)
+            self.driver = self.create_driver(proxy_settings, log_callback, show_browser=show_browser)
             return self.driver is not None
 
     def cleanup(self):

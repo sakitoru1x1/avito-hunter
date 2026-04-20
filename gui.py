@@ -407,6 +407,16 @@ class ParserApp:
             self.schedule_day_vars.append(var)
             ctk.CTkCheckBox(days_row, text=dname, variable=var).pack(side="left", padx=2)
 
+        browser_frame = ctk.CTkFrame(settings_scroll, border_width=1)
+        browser_frame.grid(row=_settings_row, column=1, sticky="ew", padx=10, pady=5)
+        _settings_row += 1
+        ctk.CTkLabel(browser_frame, text="Браузер", font=ctk.CTkFont(weight="bold")).grid(row=0, column=0, columnspan=2, pady=(5, 0))
+        self.show_browser_var = tk.BooleanVar(value=False)
+        ctk.CTkCheckBox(
+            browser_frame, text="Показывать окно браузера (для диагностики капчи)",
+            variable=self.show_browser_var,
+        ).grid(row=1, column=0, sticky="w", padx=10, pady=(4, 8))
+
         save_frame = ctk.CTkFrame(settings_scroll, fg_color="transparent")
         save_frame.grid(row=_settings_row, column=1, sticky="ew", padx=10, pady=10)
         _settings_row += 1
@@ -627,6 +637,8 @@ yR1ByZ:paNHYV8EM7su - до двоеточия логин, после - паро�
                     saved_max = DEFAULT_MAX_ITEMS
                 self.max_items = saved_max
 
+                self.show_browser_var.set(bool(settings.get("show_browser", False)))
+
                 self.log("✅ Настройки загружены")
             except Exception as e:
                 self.log(f"⚠️ Ошибка загрузки настроек: {e}")
@@ -653,6 +665,7 @@ yR1ByZ:paNHYV8EM7su - до двоеточия логин, после - паро�
             "schedule_end": self.schedule_end_entry.get().strip() or "21:00",
             "schedule_days": [bool(v.get()) for v in self.schedule_day_vars],
             "max_items": self.max_items,
+            "show_browser": bool(self.show_browser_var.get()),
         }
         try:
             with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
@@ -1153,7 +1166,8 @@ yR1ByZ:paNHYV8EM7su - до двоеточия логин, после - паро�
 
         proxy_settings = self._get_proxy_settings()
 
-        if not self.driver_manager.ensure_driver(proxy_settings, self.log):
+        show_browser = bool(self.show_browser_var.get())
+        if not self.driver_manager.ensure_driver(proxy_settings, self.log, show_browser=show_browser):
             self.log("Не удалось создать драйвер. Парсинг невозможен.")
             self.progress.stop()
             self._set_idle_ui()
