@@ -83,12 +83,14 @@ chrome.webRequest.onAuthRequired.addListener(
 
         return ext_dir
 
-    def create_driver(self, proxy_settings, log_callback=None, show_browser=False):
+    def create_driver(self, proxy_settings, log_callback=None, show_browser=False, user_data_dir=None):
         """Создает новый экземпляр ChromeDriver.
 
         proxy_settings: dict с ключами scheme, host, port, user, pass
         log_callback: функция для логирования (например app.log)
         show_browser: если True - запускаем без headless (окно видно на экране).
+        user_data_dir: путь к постоянному профилю Chrome. Позволяет сохранять
+            куки (в т.ч. решённой капчи) между перезапусками драйвера.
         """
         try:
             if self.extension_dir and os.path.exists(self.extension_dir):
@@ -114,6 +116,12 @@ chrome.webRequest.onAuthRequired.addListener(
             options.add_argument('--disable-blink-features=AutomationControlled')
             options.add_argument(f'--load-extension={self.extension_dir}')
             options.add_argument(f"user-agent={user_agent}")
+            if user_data_dir:
+                try:
+                    os.makedirs(user_data_dir, exist_ok=True)
+                    options.add_argument(f'--user-data-dir={user_data_dir}')
+                except Exception as e:
+                    logger.warning(f"Не удалось использовать user-data-dir {user_data_dir}: {e}")
             options.add_experimental_option("excludeSwitches", ["enable-automation"])
             options.add_experimental_option('useAutomationExtension', False)
 
@@ -138,10 +146,10 @@ chrome.webRequest.onAuthRequired.addListener(
             logger.error(f"Ошибка создания драйвера: {error_trace}")
             return None
 
-    def ensure_driver(self, proxy_settings, log_callback=None, show_browser=False):
+    def ensure_driver(self, proxy_settings, log_callback=None, show_browser=False, user_data_dir=None):
         """Проверяет что драйвер жив, пересоздает если нет."""
         if self.driver is None:
-            self.driver = self.create_driver(proxy_settings, log_callback, show_browser=show_browser)
+            self.driver = self.create_driver(proxy_settings, log_callback, show_browser=show_browser, user_data_dir=user_data_dir)
             return self.driver is not None
         try:
             self.driver.current_url
@@ -154,7 +162,7 @@ chrome.webRequest.onAuthRequired.addListener(
                 self.driver.quit()
             except Exception:
                 pass
-            self.driver = self.create_driver(proxy_settings, log_callback, show_browser=show_browser)
+            self.driver = self.create_driver(proxy_settings, log_callback, show_browser=show_browser, user_data_dir=user_data_dir)
             return self.driver is not None
 
     def cleanup(self):
