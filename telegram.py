@@ -29,6 +29,16 @@ def build_proxies_dict(settings):
     return {"http": proxy_url, "https": proxy_url}
 
 
+def _make_session():
+    """Сессия с trust_env=False - игнорирует системные HTTPS_PROXY/HTTP_PROXY/NO_PROXY.
+    Критично при включённом VPN: VPN-клиент часто подставляет свои env-переменные,
+    из-за которых requests ломится мимо пользовательского TG-прокси или VPN-туннеля.
+    """
+    s = requests.Session()
+    s.trust_env = False
+    return s
+
+
 class TelegramNotifier:
     def __init__(self, token=None, chat_id=None, proxies=None):
         self.token = token
@@ -36,6 +46,7 @@ class TelegramNotifier:
         self.enabled = bool(token and chat_id)
         self.base_url = f"https://api.telegram.org/bot{token}" if token else ""
         self.proxies = proxies
+        self.session = _make_session()
 
     def send_message(self, text, parse_mode='HTML'):
         if not self.enabled:
@@ -48,7 +59,7 @@ class TelegramNotifier:
                 'parse_mode': parse_mode,
                 'disable_web_page_preview': False
             }
-            response = requests.post(url, data=payload, timeout=10, proxies=self.proxies)
+            response = self.session.post(url, data=payload, timeout=10, proxies=self.proxies)
             return response.status_code == 200
         except Exception as e:
             logger.error(f"Ошибка отправки Telegram: {e}")
@@ -73,10 +84,10 @@ class TelegramNotifier:
 
             if photo_bytes:
                 files = {'photo': ('image.jpg', photo_bytes, 'image/jpeg')}
-                response = requests.post(url, data=data, files=files, timeout=30, proxies=self.proxies)
+                response = self.session.post(url, data=data, files=files, timeout=30, proxies=self.proxies)
             else:
                 data['photo'] = photo_url
-                response = requests.post(url, data=data, timeout=15, proxies=self.proxies)
+                response = self.session.post(url, data=data, timeout=15, proxies=self.proxies)
 
             if response.status_code == 200:
                 return True
@@ -95,7 +106,7 @@ class TelegramNotifier:
             return False, "Токен не указан"
         try:
             url = f"https://api.telegram.org/bot{self.token}/getMe"
-            response = requests.get(url, timeout=10, proxies=self.proxies)
+            response = self.session.get(url, timeout=10, proxies=self.proxies)
             if response.status_code == 200:
                 return True, "Подключение успешно"
             if response.status_code == 401:
@@ -121,7 +132,8 @@ def send_crash_report_to_telegram(error_text):
         if len(error_text) > 3500:
             error_text = error_text[:3500] + "\n... (обрезано)"
         message = f"⚠️ *Критическая ошибка в парсере Avito*\n```\n{error_text}\n```"
-        requests.post(
+        session = _make_session()
+        session.post(
             f"https://api.telegram.org/bot{token}/sendMessage",
             data={'chat_id': chat_id, 'text': message, 'parse_mode': 'Markdown'},
             timeout=10,
