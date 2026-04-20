@@ -1,11 +1,18 @@
 import os
 import json
+import time
 import requests
 
 from config import SETTINGS_FILE
 from utils import sanitize_error_for_telegram
 from logger_setup import logger
 from errors import format_user_error
+
+
+TG_RETRYABLE = (
+    requests.exceptions.Timeout,
+    requests.exceptions.ConnectionError,
+)
 
 
 def build_proxies_dict(settings):
@@ -48,6 +55,22 @@ class TelegramNotifier:
         self.proxies = proxies
         self.session = _make_session()
 
+    def _post_with_retry(self, url, *, data, files=None, timeout, retries=2, backoff=3):
+        """POST с ретраями на Timeout/ConnectionError. При VPN связь до api.telegram.org
+        бывает флаковой - один-два повтора обычно спасают."""
+        last_exc = None
+        for attempt in range(retries + 1):
+            try:
+                return self.session.post(url, data=data, files=files, timeout=timeout, proxies=self.proxies)
+            except TG_RETRYABLE as e:
+                last_exc = e
+                if attempt < retries:
+                    wait = backoff * (attempt + 1)
+                    logger.warning(f"Telegram {type(e).__name__}, ретрай через {wait}s (попытка {attempt + 1}/{retries})")
+                    time.sleep(wait)
+                else:
+                    raise
+
     def send_message(self, text, parse_mode='HTML'):
         if not self.enabled:
             return False
@@ -59,7 +82,7 @@ class TelegramNotifier:
                 'parse_mode': parse_mode,
                 'disable_web_page_preview': False
             }
-            response = self.session.post(url, data=payload, timeout=10, proxies=self.proxies)
+            response = self._post_with_retry(url, data=payload, timeout=30)
             return response.status_code == 200
         except Exception as e:
             logger.error(f"Ошибка отправки Telegram: {e}")
@@ -84,10 +107,10 @@ class TelegramNotifier:
 
             if photo_bytes:
                 files = {'photo': ('image.jpg', photo_bytes, 'image/jpeg')}
-                response = self.session.post(url, data=data, files=files, timeout=30, proxies=self.proxies)
+                response = self._post_with_retry(url, data=data, files=files, timeout=60)
             else:
                 data['photo'] = photo_url
-                response = self.session.post(url, data=data, timeout=15, proxies=self.proxies)
+                response = self._post_with_retry(url, data=data, timeout=45)
 
             if response.status_code == 200:
                 return True
@@ -106,7 +129,7 @@ class TelegramNotifier:
             return False, "Токен не указан"
         try:
             url = f"https://api.telegram.org/bot{self.token}/getMe"
-            response = self.session.get(url, timeout=10, proxies=self.proxies)
+            response = self.session.get(url, timeout=30, proxies=self.proxies)
             if response.status_code == 200:
                 return True, "Подключение успешно"
             if response.status_code == 401:
