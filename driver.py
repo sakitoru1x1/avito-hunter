@@ -144,7 +144,9 @@ chrome.webRequest.onAuthRequired.addListener(
         try:
             self.driver.current_url
             return True
-        except (WebDriverException, AttributeError):
+        except Exception:
+            # Ловим всё - WebDriverException, urllib3 MaxRetryError/NewConnectionError,
+            # ConnectionRefusedError, AttributeError. Любая ошибка при probe = драйвер мёртв.
             if log_callback:
                 log_callback("Драйвер не отвечает, пересоздаём...")
             logger.warning("Драйвер не отвечает, пересоздаём...")
@@ -162,6 +164,27 @@ chrome.webRequest.onAuthRequired.addListener(
                 self.driver.quit()
             except Exception:
                 pass
+            self.driver = None
+
+        if self.extension_dir and os.path.exists(self.extension_dir):
+            shutil.rmtree(self.extension_dir, ignore_errors=True)
+            self.extension_dir = None
+
+    def hard_kill(self):
+        """Жёсткая остановка: убиваем процесс chromedriver напрямую, без HTTP.
+        В отличие от cleanup()/quit() не виснет если worker-поток параллельно
+        держит HTTP-соединение. Зомби-процессы подметёт ОС."""
+        if self.driver is not None:
+            try:
+                service = getattr(self.driver, "service", None)
+                process = getattr(service, "process", None) if service else None
+                if process is not None:
+                    try:
+                        process.kill()
+                    except Exception as e:
+                        logger.warning(f"process.kill() упал: {e}")
+            except Exception as e:
+                logger.warning(f"hard_kill: {e}")
             self.driver = None
 
         if self.extension_dir and os.path.exists(self.extension_dir):
