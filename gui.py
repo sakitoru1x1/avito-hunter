@@ -1350,7 +1350,7 @@ yR1ByZ:paNHYV8EM7su - до двоеточия логин, после - паро�
                 if current_position > last_height:
                     current_position = last_height
                 driver.execute_script(f"window.scrollTo(0, {current_position});")
-                time.sleep(random.uniform(0.5, 1.2))
+                time.sleep(random.uniform(0.2, 0.6))
                 if self.stop_parsing:
                     return
 
@@ -1367,10 +1367,45 @@ yR1ByZ:paNHYV8EM7su - до двоеточия логин, после - паро�
 
             self.log("Прокрутка завершена")
 
-            # Картинок НЕ ждём - скорость важнее. URL фото извлекается как есть
-            # (src/srcset/currentSrc). Если картинка ещё не прогружена - ставим
-            # "Н/Д", в карточке будет ссылка "Фото" на само объявление, в Telegram
-            # preview подтянется сам из ссылки на объявление.
+            # Ждём пока подгрузятся src картинок (Avito лениво их загружает)
+            # Проверяем что у всех <img> в карточках src не placeholder (не data:...).
+            check_img_js = """
+                const cards = document.querySelectorAll("[data-marker='item']");
+                let ready = 0, total = cards.length;
+                for (const c of cards) {
+                    const img = c.querySelector("img[data-marker='image']") || c.querySelector("img");
+                    if (!img) { ready++; continue; }
+                    const src = img.getAttribute('src') || '';
+                    if (src && !src.startsWith('data:')) ready++;
+                }
+                return {ready: ready, total: total};
+            """
+            deadline = time.time() + 6.0
+            nudged = False
+            last_ready, last_total = 0, 0
+            while time.time() < deadline:
+                if self.stop_parsing:
+                    return
+                try:
+                    stats = driver.execute_script(check_img_js)
+                    last_ready = stats.get("ready", 0)
+                    last_total = stats.get("total", 0)
+                except Exception:
+                    break
+                if last_total == 0:
+                    break
+                if last_ready / last_total >= 0.95:
+                    self.log(f"Картинки готовы: {last_ready}/{last_total}")
+                    break
+                # Если >30% картинок не готово - подталкиваем lazy-loader: низ→верх
+                if not nudged and last_ready / last_total < 0.7:
+                    driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
+                    time.sleep(0.3)
+                    driver.execute_script("window.scrollTo(0, 0);")
+                    nudged = True
+                time.sleep(0.3)
+            if last_total > 0 and last_ready / last_total < 0.95:
+                self.log(f"⚠️ Картинки догрузились частично: {last_ready}/{last_total} - продолжаем")
 
             if self.stop_parsing:
                 return
@@ -1485,56 +1520,6 @@ yR1ByZ:paNHYV8EM7su - до двоеточия логин, после - паро�
         except Exception:
             return None
 
-    def _extract_image_url(self, item):
-        """Достаёт URL картинки из карточки.
-
-        Avito лениво грузит картинки - src может быть data:... placeholder.
-        Порядок попыток:
-        1. src у <img data-marker='image'> если не placeholder
-        2. srcset у того же img - берём последний URL (обычно самое большое разрешение)
-        3. currentSrc у того же img (что браузер реально выбрал из srcset)
-        4. любой <img> с непустым реальным src среди всех в карточке
-        """
-        def pick_from_srcset(srcset):
-            if not srcset:
-                return None
-            # srcset: "url1 400w, url2 800w, url3 1200w"
-            parts = [p.strip().split()[0] for p in srcset.split(",") if p.strip()]
-            parts = [p for p in parts if p and not p.startswith("data:")]
-            return parts[-1] if parts else None
-
-        try:
-            img = item.find_element(By.CSS_SELECTOR, "img[data-marker='image']")
-        except NoSuchElementException:
-            img = None
-
-        if img is not None:
-            src = img.get_attribute("src") or ""
-            if src and not src.startswith("data:"):
-                return src
-            url = pick_from_srcset(img.get_attribute("srcset"))
-            if url:
-                return url
-            try:
-                cur = img.get_attribute("currentSrc") or ""
-                if cur and not cur.startswith("data:"):
-                    return cur
-            except Exception:
-                pass
-
-        try:
-            for candidate in item.find_elements(By.TAG_NAME, "img"):
-                src = candidate.get_attribute("src") or ""
-                if src and not src.startswith("data:") and ("avatars" in src or "img" in src):
-                    return src
-                url = pick_from_srcset(candidate.get_attribute("srcset"))
-                if url and ("avatars" in url or "img" in url):
-                    return url
-        except Exception:
-            pass
-
-        return "Н/Д"
-
     def _get_ignore_words(self):
         raw = self.ignore_entry.get().strip()
         if not raw:
@@ -1629,7 +1614,22 @@ yR1ByZ:paNHYV8EM7su - до двоеточия логин, после - паро�
                             self._filtered_ids.add(item_id)
                             continue
 
-                img_url = self._extract_image_url(item)
+                img_url = "Н/Д"
+                try:
+                    img = item.find_element(By.CSS_SELECTOR, "img[data-marker='image']")
+                    src = img.get_attribute("src")
+                    if src and not src.startswith("data:"):
+                        img_url = src
+                except NoSuchElementException:
+                    try:
+                        imgs = item.find_elements(By.TAG_NAME, "img")
+                        for img in imgs:
+                            src = img.get_attribute("src")
+                            if src and not src.startswith("data:") and ("avatars" in src or "img" in src):
+                                img_url = src
+                                break
+                    except Exception:
+                        pass
 
                 description = "Н/Д"
                 for desc_selector in [
@@ -1750,8 +1750,19 @@ yR1ByZ:paNHYV8EM7su - до двоеточия логин, после - паро�
             f"<b>🔔 Найдено новых объявлений: {len(new_items)}</b>"
         )
 
-        # Фото НЕ качаем и НЕ шлём в TG - Telegram сам подтянет preview
-        # из ссылки на объявление (disable_web_page_preview=False в send_message).
+        # Сессия для скачивания картинок с Avito (не через TG-прокси, с нашими куками)
+        img_session = requests.Session()
+        if self.driver_manager.driver:
+            try:
+                for c in self.driver_manager.driver.get_cookies():
+                    img_session.cookies.set(c['name'], c['value'])
+            except Exception:
+                pass
+        img_session.headers.update({
+            'User-Agent': random.choice(USER_AGENTS),
+            'Referer': 'https://www.avito.ru/',
+        })
+
         for item in new_items:
             caption = f"<a href='{item['link']}'>{item['title']}</a>\n"
             caption += f"💰 {item['price']} руб.\n"
@@ -1761,7 +1772,17 @@ yR1ByZ:paNHYV8EM7su - до двоеточия логин, после - паро�
                 if len(desc) > 400:
                     desc = desc[:400] + "..."
                 caption += f"📝 {desc}"
-            self.telegram_notifier.send_message(caption)
+
+            img = item.get('image_url')
+            photo_bytes = None
+            if img and img != "Н/Д" and img.startswith("http"):
+                photo_bytes = self._fetch_image_bytes(img_session, img)
+
+            if photo_bytes:
+                self.telegram_notifier.send_photo(caption=caption, photo_bytes=photo_bytes)
+            else:
+                # Avito блокирует и нас и TG - шлём просто текст со ссылкой
+                self.telegram_notifier.send_message(caption)
 
     def _detect_disappeared(self, all_items, new_results, current_query):
         """Находит объявления, которые были активны в выдаче и пропали в текущем парсе."""
@@ -1839,82 +1860,73 @@ yR1ByZ:paNHYV8EM7su - до двоеточия логин, после - паро�
         logger.warning(f"Не скачалась картинка {image_url[:80]}: {last_err}")
         return None
 
-    def show_photo_popup(self, item):
-        """Открывает попап с фотографией объявления.
-
-        Фото качается в фоне через image_executor, на время скачивания
-        показываем 'Загрузка...'. Ошибка - кнопка 'Открыть в браузере'."""
-        image_url = item.get('image_url')
-        if not image_url or image_url == "Н/Д":
+    def _load_image_async(self, session, image_url, img_label, card, gen):
+        """Берёт байты картинки (из кэша или качает), превращает в PIL и ставит в карточку."""
+        if gen != self._results_gen:
             return
 
-        popup = ctk.CTkToplevel(self.root)
-        popup.title(item.get('title', 'Фото'))
-        popup.geometry("700x520")
-        popup.transient(self.root)
+        data = self._fetch_image_bytes(session, image_url)
+        if gen != self._results_gen:
+            return
+
+        img = None
+        if data:
+            try:
+                img = Image.open(BytesIO(data))
+                img.load()
+                img.thumbnail((150, 150))
+            except Exception as e:
+                logger.warning(f"PIL не открыл картинку {image_url[:80]}: {e}")
+
+        if img is not None:
+            self.root.after(0, lambda: self._set_image(img, img_label, gen))
+        else:
+            self.root.after(0, lambda: self._set_image_fallback(image_url, img_label, card, gen))
+
+    def _set_image(self, pil_image, img_label, gen):
+        if gen != self._results_gen:
+            return
         try:
-            popup.lift()
-            popup.focus_force()
+            if not img_label.winfo_exists():
+                return
+            size = pil_image.size
+            photo = ctk.CTkImage(light_image=pil_image, dark_image=pil_image, size=size)
+            self.images.append(photo)
+            img_label.configure(image=photo, text="")
+        except Exception as e:
+            logger.warning(f"Не применилась картинка: {e}")
+
+    def _set_image_fallback(self, url, img_label, card, gen):
+        if gen != self._results_gen:
+            return
+        try:
+            if not img_label.winfo_exists():
+                return
+            img_label.configure(text="📷 Открыть фото", text_color="#4a9eff", cursor="hand2")
+            img_label.bind("<Button-1>", lambda e=None, u=url: webbrowser.open(u))
         except Exception:
             pass
-
-        label = ctk.CTkLabel(popup, text="⏳ Загрузка фото...", font=ctk.CTkFont(size=14))
-        label.pack(expand=True, fill="both", padx=10, pady=10)
-        label.bind(
-            "<Button-1>",
-            lambda e=None, url=image_url: webbrowser.open(url),
-        )
-
-        session = requests.Session()
-        if self.driver_manager.driver:
-            try:
-                for c in self.driver_manager.driver.get_cookies():
-                    session.cookies.set(c['name'], c['value'])
-            except Exception:
-                pass
-        session.headers.update({
-            'User-Agent': random.choice(USER_AGENTS),
-            'Referer': 'https://www.avito.ru/',
-        })
-
-        def worker():
-            data = self._fetch_image_bytes(session, image_url)
-            pil = None
-            if data:
-                try:
-                    pil = Image.open(BytesIO(data))
-                    pil.load()
-                    pil.thumbnail((680, 480))
-                except Exception as e:
-                    logger.warning(f"PIL не открыл картинку для попапа: {e}")
-                    pil = None
-
-            def apply():
-                try:
-                    if not popup.winfo_exists():
-                        return
-                    if pil is not None:
-                        photo = ctk.CTkImage(light_image=pil, dark_image=pil, size=pil.size)
-                        # держим ссылку на CTkImage - иначе GC
-                        label.configure(image=photo, text="")
-                        label._photo_ref = photo
-                    else:
-                        label.configure(
-                            text="❌ Не удалось загрузить фото\nКликните чтобы открыть в браузере",
-                            cursor="hand2",
-                        )
-                except Exception:
-                    pass
-
-            self.root.after(0, apply)
-
-        self.image_executor.submit(worker)
 
     def display_results(self):
         try:
             self._results_gen = getattr(self, '_results_gen', 0) + 1
+            gen = self._results_gen
             for widget in self.results_frame.winfo_children():
                 widget.destroy()
+            self.images = []
+
+            session = requests.Session()
+            if self.driver_manager.driver:
+                try:
+                    selenium_cookies = self.driver_manager.driver.get_cookies()
+                    for cookie in selenium_cookies:
+                        session.cookies.set(cookie['name'], cookie['value'])
+                except Exception:
+                    pass
+            session.headers.update({
+                'User-Agent': random.choice(USER_AGENTS),
+                'Referer': 'https://www.avito.ru/'
+            })
 
             fav_only = self.favorites_only_var.get() if hasattr(self, 'favorites_only_var') else False
             visible_items = [it for it in self.all_items if (not fav_only) or it.get("is_favorite")]
@@ -1922,7 +1934,7 @@ yR1ByZ:paNHYV8EM7su - до двоеточия логин, после - паро�
             for item in visible_items:
                 card = ctk.CTkFrame(self.results_frame, border_width=1)
                 card.pack(fill="x", padx=5, pady=5)
-                card.grid_columnconfigure(0, weight=1)
+                card.grid_columnconfigure(1, weight=1)
 
                 state = {"hover_handled": False, "is_new": item.get("is_new", False)}
 
@@ -1948,7 +1960,7 @@ yR1ByZ:paNHYV8EM7su - до двоеточия логин, после - паро�
                 card.bind("<Leave>", on_leave, add="+")
 
                 header = ctk.CTkFrame(card, fg_color="transparent")
-                header.grid(row=0, column=0, sticky="ew", pady=5)
+                header.grid(row=0, column=0, columnspan=2, sticky="ew", pady=5)
 
                 fav_btn = ctk.CTkButton(
                     header,
@@ -1959,35 +1971,35 @@ yR1ByZ:paNHYV8EM7su - до двоеточия логин, после - паро�
                 fav_btn.pack(side="left", padx=(5, 5))
                 ctk.CTkLabel(header, text=item['title'], font=ctk.CTkFont(size=14, weight='bold')).pack(side="left")
 
+                img_label = ctk.CTkLabel(card, text="")
+                img_label.grid(row=1, column=0, rowspan=5, padx=5, pady=5, sticky="n")
+
+                if item['image_url'] != "Н/Д":
+                    img_label.configure(text="⏳", text_color="gray")
+                    self.image_executor.submit(
+                        self._load_image_async, session, item['image_url'], img_label, card, gen
+                    )
+                else:
+                    img_label.configure(text="[нет фото]")
+
                 price_frame = ctk.CTkFrame(card, fg_color="transparent")
-                price_frame.grid(row=1, column=0, sticky="ew", padx=5)
+                price_frame.grid(row=1, column=1, sticky="ew", padx=5)
                 ctk.CTkLabel(price_frame, text=f"Цена: {item['price']} руб.", font=ctk.CTkFont(size=13)).pack(side="left")
 
                 desc = ctk.CTkTextbox(card, height=100, wrap="word", font=ctk.CTkFont(size=13))
                 desc.insert("1.0", item['description'])
                 desc.configure(state='disabled')
-                desc.grid(row=2, column=0, sticky="ew", pady=5, padx=5)
+                desc.grid(row=2, column=1, sticky="ew", pady=5, padx=5)
 
                 first_seen = item.get("first_seen", "Н/Д")
-                ctk.CTkLabel(card, text=f"Время добавления в программу: {first_seen}", font=ctk.CTkFont(size=13)).grid(
-                    row=3, column=0, sticky="w", padx=5)
+                ctk.CTkLabel(card, text=f"Время добавления в программу: {first_seen}", font=ctk.CTkFont(size=13)).grid(row=3,
+                                                                                                              column=1,
+                                                                                                              sticky="w", padx=5)
 
-                links_frame = ctk.CTkFrame(card, fg_color="transparent")
-                links_frame.grid(row=4, column=0, sticky="w", padx=5, pady=(5, 15))
-
-                link_label = ctk.CTkLabel(links_frame, text="Открыть объявление", text_color="#4a9eff",
-                                          cursor="hand2", font=ctk.CTkFont(size=13))
-                link_label.pack(side="left")
+                link_label = ctk.CTkLabel(card, text="Открыть объявление", text_color="#4a9eff", cursor="hand2",
+                                          font=ctk.CTkFont(size=13))
+                link_label.grid(row=4, column=1, sticky="w", padx=5, pady=(5, 15))
                 link_label.bind("<Button-1>", lambda e=None, url=item['link']: webbrowser.open(url))
-
-                if item.get('image_url') and item['image_url'] != "Н/Д":
-                    photo_link = ctk.CTkLabel(links_frame, text="📷 Фото", text_color="#4a9eff",
-                                              cursor="hand2", font=ctk.CTkFont(size=13))
-                    photo_link.pack(side="left", padx=(20, 0))
-                    photo_link.bind(
-                        "<Button-1>",
-                        lambda e=None, _it=item: self.show_photo_popup(_it),
-                    )
 
             self.results_frame.update_idletasks()
             self.canvas.configure(scrollregion=self.canvas.bbox("all"))
