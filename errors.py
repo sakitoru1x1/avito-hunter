@@ -164,12 +164,12 @@ def format_user_error(exc, context=None):
             if status in (429, 403):
                 return f"⚠️ Сервер ответил {status}. {AVITO_BLOCK_HINT}"
             return f"❌ HTTP {status}: {_first_line(exc)}"
+        if isinstance(exc, requests.exceptions.ProxyError):
+            return "❌ Прокси не отвечает. Проверьте настройки прокси на вкладке 'Настройки'."
         if isinstance(exc, requests.exceptions.ConnectionError):
             return f"❌ Нет соединения. {NETWORK_HINT}"
         if isinstance(exc, requests.exceptions.Timeout):
             return f"⏱ Сервер не ответил вовремя. {NETWORK_HINT}"
-        if isinstance(exc, requests.exceptions.ProxyError):
-            return "❌ Прокси не отвечает. Проверьте настройки прокси на вкладке 'Настройки'."
         if isinstance(exc, requests.exceptions.RequestException):
             return f"❌ Сетевая ошибка: {_first_line(exc)}"
 
