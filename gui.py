@@ -101,22 +101,20 @@ class ParserApp:
         # ========== Вкладка "Результаты поиска" ==========
         tab_results = self.notebook.add("Результаты поиска")
 
-        top_half = ctk.CTkFrame(tab_results)
+        top_half = ctk.CTkFrame(tab_results, fg_color="transparent")
         top_half.pack(fill="x", pady=(0, 5))
 
-        left_frame = ctk.CTkFrame(top_half, border_width=1)
-        left_frame.pack(side="left", fill="both", expand=False, padx=(0, 5))
-        ctk.CTkLabel(left_frame, text="Параметры поиска", font=ctk.CTkFont(weight="bold")).pack(pady=(5,0))
+        # Левая колонка - критерии (город, запрос, игнор, цена)
+        search_left = ctk.CTkFrame(top_half, border_width=1)
+        search_left.pack(side="left", fill="both", expand=True, padx=(0, 3))
+        ctk.CTkLabel(search_left, text="Критерии поиска", font=ctk.CTkFont(weight="bold")).pack(pady=(5, 0))
 
-        row1 = ctk.CTkFrame(left_frame)
+        row1 = ctk.CTkFrame(search_left)
         row1.pack(fill="x", pady=2)
         ctk.CTkLabel(row1, text="Город:").pack(side="left", padx=2)
         self.city_var = tk.StringVar(value="Москва")
         self.city_combo = ctk.CTkComboBox(row1, variable=self.city_var, values=CITIES, state="readonly")
         self.city_combo.pack(side="left", padx=2)
-        # ctk.CTkComboBox bind is different, it has 'command' parameter, but for backward compatibility we might keep bind if it works or use command.
-        # Actually CTkComboBox uses 'command' but it doesn't provide the event.
-        # Let's see if bind works or if we should use command.
         self.city_combo.configure(command=lambda _: self.on_city_change(None))
 
         self.all_russia_var = tk.BooleanVar()
@@ -124,21 +122,21 @@ class ParserApp:
                                               command=self.on_all_russia)
         self.all_russia_cb.pack(side="left", padx=10)
 
-        row2 = ctk.CTkFrame(left_frame)
+        row2 = ctk.CTkFrame(search_left)
         row2.pack(fill="x", pady=2)
         ctk.CTkLabel(row2, text="Запрос:").pack(side="left", padx=2)
         self.query_entry = ctk.CTkEntry(row2, width=30*8)
         self.query_entry.pack(side="left", padx=2, fill="x", expand=True)
         self.query_entry.insert(0, "")
 
-        row2b = ctk.CTkFrame(left_frame)
+        row2b = ctk.CTkFrame(search_left)
         row2b.pack(fill="x", pady=2)
         ctk.CTkLabel(row2b, text="Игнор:").pack(side="left", padx=2)
         self.ignore_entry = ctk.CTkEntry(row2b, width=30*8,
                                           placeholder_text="через запятую: 3s, б/у, сломан")
         self.ignore_entry.pack(side="left", padx=2, fill="x", expand=True)
 
-        row3 = ctk.CTkFrame(left_frame)
+        row3 = ctk.CTkFrame(search_left)
         row3.pack(fill="x", pady=2)
         ctk.CTkLabel(row3, text="Цена от:").pack(side="left", padx=2)
         self.min_price_entry = ctk.CTkEntry(row3, width=8*8)
@@ -149,7 +147,12 @@ class ParserApp:
         self.max_price_entry.pack(side="left", padx=2)
         self.max_price_entry.insert(0, "")
 
-        row4 = ctk.CTkFrame(left_frame)
+        # Правая колонка - управление (флажки, кнопки, интервал)
+        search_right = ctk.CTkFrame(top_half, border_width=1)
+        search_right.pack(side="right", fill="both", expand=True, padx=(3, 0))
+        ctk.CTkLabel(search_right, text="Управление", font=ctk.CTkFont(weight="bold")).pack(pady=(5, 0))
+
+        row4 = ctk.CTkFrame(search_right)
         row4.pack(fill="x", pady=2)
         self.notify_cb = ctk.CTkCheckBox(row4, text="Звук", variable=self.notify_var)
         self.notify_cb.pack(side="left", padx=2)
@@ -158,7 +161,7 @@ class ParserApp:
         self.delivery_cb = ctk.CTkCheckBox(row4, text="Авито доставка", variable=self.delivery_var)
         self.delivery_cb.pack(side="left", padx=2)
 
-        row5 = ctk.CTkFrame(left_frame)
+        row5 = ctk.CTkFrame(search_right)
         row5.pack(fill="x", pady=5)
         self.start_button = ctk.CTkButton(row5, text="▶ Начать", command=self.start_parsing)
         self.start_button.pack(side="left", padx=2)
@@ -167,7 +170,7 @@ class ParserApp:
         self.stop_button = ctk.CTkButton(row5, text="⏹ Стоп", command=self.stop_parsing_handler, state='disabled')
         self.stop_button.pack(side="left", padx=2)
 
-        row5b = ctk.CTkFrame(left_frame)
+        row5b = ctk.CTkFrame(search_right)
         row5b.pack(fill="x", pady=2)
         self.clear_history_button = ctk.CTkButton(row5b, text="🗑 Очистить историю", command=self.clear_history)
         self.clear_history_button.pack(side="left", padx=2)
@@ -175,7 +178,7 @@ class ParserApp:
                                                   command=self.save_current_search_as_profile)
         self.save_as_profile_button.pack(side="left", padx=2)
 
-        row7 = ctk.CTkFrame(left_frame)
+        row7 = ctk.CTkFrame(search_right)
         row7.pack(fill="x", pady=2)
         ctk.CTkLabel(row7, text="Интервал (мин): от").pack(side="left", padx=2)
         self.min_interval = ctk.CTkEntry(row7, width=4*8)
@@ -186,41 +189,8 @@ class ParserApp:
         self.max_interval.pack(side="left", padx=2)
         self.max_interval.insert(0, "3")
 
-        row8 = ctk.CTkFrame(left_frame)
-        row8.pack(fill="x", pady=2)
-        ctk.CTkLabel(row8, text="Макс. объявлений:").pack(side="left", padx=2)
-        self.max_items_entry = ctk.CTkEntry(row8, width=5*8)
-        self.max_items_entry.pack(side="left", padx=2)
-        self.max_items_entry.insert(0, str(DEFAULT_MAX_ITEMS))
-
-        right_frame = ctk.CTkFrame(top_half, border_width=1)
-        right_frame.pack(side="right", fill="both", expand=True)
-        ctk.CTkLabel(right_frame, text="Лог выполнения", font=ctk.CTkFont(weight="bold")).pack(pady=(5,0))
-
-        self.log_text = ctk.CTkTextbox(right_frame, wrap="word", height=200)
-        self.log_text.pack(fill="both", expand=True, padx=5, pady=5)
-        # Read-only, но с возможностью выделять/копировать
-        self.log_text.configure(state="disabled")
-        # Тег для ссылок - синие, подчёркнутые, курсор-рука
-        self.log_text._textbox.tag_configure("link", foreground="#4EA1FF", underline=True)
-        self.log_text._textbox.tag_bind("link", "<Enter>",
-            lambda e: self.log_text._textbox.configure(cursor="hand2"))
-        self.log_text._textbox.tag_bind("link", "<Leave>",
-            lambda e: self.log_text._textbox.configure(cursor=""))
-        self.log_text._textbox.tag_bind("link", "<Button-1>", self._on_log_link_click)
-
         bottom_frame = ctk.CTkFrame(tab_results, border_width=1)
         bottom_frame.pack(fill="both", expand=True, pady=(5, 0))
-        ctk.CTkLabel(bottom_frame, text="Результаты поиска", font=ctk.CTkFont(weight="bold")).pack(pady=(5,0))
-
-        results_toolbar = ctk.CTkFrame(bottom_frame)
-        results_toolbar.pack(fill="x", pady=(0, 5))
-        self.favorites_only_var = tk.BooleanVar(value=False)
-        ctk.CTkCheckBox(
-            results_toolbar, text="⭐ Только избранное",
-            variable=self.favorites_only_var,
-            command=self.display_results,
-        ).pack(side="left", padx=5)
 
         # Баннер "Новые объявления" с кнопкой перехода к следующему
         self._new_banner_frame = ctk.CTkFrame(bottom_frame, fg_color="#5a1e1e", height=36)
@@ -265,6 +235,20 @@ class ParserApp:
         self.canvas.bind("<Leave>", _unbind_wheel)
         self.results_frame.bind("<Enter>", _bind_wheel)
         self.results_frame.bind("<Leave>", _unbind_wheel)
+
+        # ========== Вкладка "Лог" ==========
+        tab_log = self.notebook.add("Лог")
+        self.log_text = ctk.CTkTextbox(tab_log, wrap="word")
+        self.log_text.pack(fill="both", expand=True, padx=5, pady=5)
+        # Read-only, но с возможностью выделять/копировать
+        self.log_text.configure(state="disabled")
+        # Тег для ссылок - синие, подчёркнутые, курсор-рука
+        self.log_text._textbox.tag_configure("link", foreground="#4EA1FF", underline=True)
+        self.log_text._textbox.tag_bind("link", "<Enter>",
+            lambda e: self.log_text._textbox.configure(cursor="hand2"))
+        self.log_text._textbox.tag_bind("link", "<Leave>",
+            lambda e: self.log_text._textbox.configure(cursor=""))
+        self.log_text._textbox.tag_bind("link", "<Button-1>", self._on_log_link_click)
 
         # ========== Вкладка "Настройки" ==========
         tab_settings = self.notebook.add("Настройки")
@@ -455,48 +439,48 @@ class ParserApp:
         self.profile_query_entry = ctk.CTkEntry(profiles_right, width=30*8)
         self.profile_query_entry.grid(row=2, column=1, padx=5, pady=2, sticky="w")
 
-        ctk.CTkLabel(profiles_right, text="Игнор:").grid(row=2, column=2, sticky="w", pady=2, padx=(15, 5))
+        ctk.CTkLabel(profiles_right, text="Игнор:").grid(row=3, column=0, sticky="w", pady=2, padx=5)
         self.profile_ignore_entry = ctk.CTkEntry(profiles_right, width=30*8,
                                                   placeholder_text="через запятую: 3s, б/у")
-        self.profile_ignore_entry.grid(row=2, column=3, padx=5, pady=2, sticky="w")
+        self.profile_ignore_entry.grid(row=3, column=1, padx=5, pady=2, sticky="w")
 
-        ctk.CTkLabel(profiles_right, text="Город:").grid(row=3, column=0, sticky="w", pady=2, padx=5)
+        ctk.CTkLabel(profiles_right, text="Город:").grid(row=4, column=0, sticky="w", pady=2, padx=5)
         self.profile_city_var = tk.StringVar(value="Москва")
         self.profile_city_combo = ctk.CTkComboBox(
             profiles_right, variable=self.profile_city_var, values=CITIES, width=27*8, state="readonly"
         )
-        self.profile_city_combo.grid(row=3, column=1, padx=5, pady=2, sticky="w")
+        self.profile_city_combo.grid(row=4, column=1, padx=5, pady=2, sticky="w")
 
-        ctk.CTkLabel(profiles_right, text="Цена от:").grid(row=4, column=0, sticky="w", pady=2, padx=5)
+        ctk.CTkLabel(profiles_right, text="Цена от:").grid(row=5, column=0, sticky="w", pady=2, padx=5)
         self.profile_min_price_entry = ctk.CTkEntry(profiles_right, width=12*8)
-        self.profile_min_price_entry.grid(row=4, column=1, padx=5, pady=2, sticky="w")
+        self.profile_min_price_entry.grid(row=5, column=1, padx=5, pady=2, sticky="w")
 
-        ctk.CTkLabel(profiles_right, text="Цена до:").grid(row=5, column=0, sticky="w", pady=2, padx=5)
+        ctk.CTkLabel(profiles_right, text="Цена до:").grid(row=6, column=0, sticky="w", pady=2, padx=5)
         self.profile_max_price_entry = ctk.CTkEntry(profiles_right, width=12*8)
-        self.profile_max_price_entry.grid(row=5, column=1, padx=5, pady=2, sticky="w")
+        self.profile_max_price_entry.grid(row=6, column=1, padx=5, pady=2, sticky="w")
 
-        ctk.CTkLabel(profiles_right, text="Интервал от (мин):").grid(row=6, column=0, sticky="w", pady=2, padx=5)
+        ctk.CTkLabel(profiles_right, text="Интервал от (мин):").grid(row=7, column=0, sticky="w", pady=2, padx=5)
         self.profile_min_interval_entry = ctk.CTkEntry(profiles_right, width=12*8)
-        self.profile_min_interval_entry.grid(row=6, column=1, padx=5, pady=2, sticky="w")
+        self.profile_min_interval_entry.grid(row=7, column=1, padx=5, pady=2, sticky="w")
         self.profile_min_interval_entry.insert(0, "1")
 
-        ctk.CTkLabel(profiles_right, text="Интервал до (мин):").grid(row=7, column=0, sticky="w", pady=2, padx=5)
+        ctk.CTkLabel(profiles_right, text="Интервал до (мин):").grid(row=8, column=0, sticky="w", pady=2, padx=5)
         self.profile_max_interval_entry = ctk.CTkEntry(profiles_right, width=12*8)
-        self.profile_max_interval_entry.grid(row=7, column=1, padx=5, pady=2, sticky="w")
+        self.profile_max_interval_entry.grid(row=8, column=1, padx=5, pady=2, sticky="w")
         self.profile_max_interval_entry.insert(0, "3")
 
         self.profile_delivery_var = tk.BooleanVar(value=False)
         ctk.CTkCheckBox(
             profiles_right, text="Авито доставка", variable=self.profile_delivery_var,
-        ).grid(row=8, column=1, padx=5, pady=2, sticky="w")
+        ).grid(row=9, column=1, padx=5, pady=2, sticky="w")
 
         self.profile_filter_services_var = tk.BooleanVar(value=False)
         ctk.CTkCheckBox(
             profiles_right, text="Убрать услуги", variable=self.profile_filter_services_var,
-        ).grid(row=9, column=1, padx=5, pady=2, sticky="w")
+        ).grid(row=10, column=1, padx=5, pady=2, sticky="w")
 
         profiles_buttons = ctk.CTkFrame(profiles_right)
-        profiles_buttons.grid(row=10, column=0, columnspan=2, pady=10, sticky="w")
+        profiles_buttons.grid(row=11, column=0, columnspan=2, pady=10, sticky="w")
 
         ctk.CTkButton(profiles_buttons, text="📥 Загрузить в поиск", command=self.profile_load_to_search).pack(side="left", padx=2)
         ctk.CTkButton(profiles_buttons, text="➕ Новый", command=self.profile_new).pack(side="left", padx=2)
@@ -640,9 +624,6 @@ yR1ByZ:paNHYV8EM7su - до двоеточия логин, после - паро�
                 saved_max = int(settings.get("max_items", DEFAULT_MAX_ITEMS))
                 if saved_max <= 50:
                     saved_max = DEFAULT_MAX_ITEMS
-                    self.log(f"ℹ️ Лимит истории поднят до {DEFAULT_MAX_ITEMS} (избегаем повторной обработки)")
-                self.max_items_entry.delete(0, tk.END)
-                self.max_items_entry.insert(0, str(saved_max))
                 self.max_items = saved_max
 
                 self.log("✅ Настройки загружены")
@@ -652,16 +633,6 @@ yR1ByZ:paNHYV8EM7su - до двоеточия логин, после - паро�
             self.log("ℹ️ Файл настроек не найден, используйте поля ввода")
 
     def save_settings(self):
-        try:
-            max_items_val = int(self.max_items_entry.get().strip())
-            if max_items_val < 10:
-                max_items_val = 10
-            if max_items_val > 500:
-                max_items_val = 500
-            self.max_items = max_items_val
-        except ValueError:
-            self.max_items = DEFAULT_MAX_ITEMS
-
         settings = {
             "telegram_token": self.telegram_token_entry.get().strip(),
             "telegram_chat_id": self.telegram_chat_id_entry.get().strip(),
@@ -783,19 +754,6 @@ yR1ByZ:paNHYV8EM7su - до двоеточия логин, после - паро�
             toast.after(duration_ms, toast.destroy)
         except Exception as e:
             logger.error(f"Не удалось показать тост: {e}")
-
-    def toggle_favorite(self, item):
-        """Переключает отметку 'избранное' у объявления."""
-        new_val = not bool(item.get("is_favorite"))
-        item["is_favorite"] = new_val
-        try:
-            database.set_favorite(item["id"], new_val)
-        except Exception as e:
-            self.log(f"⚠️ Не удалось обновить избранное: {e}")
-        # Инвалидируем fast-path: звёздочка на карточке должна перерисоваться,
-        # но visible_ids может совпадать (если fav_only=False), поэтому насильно.
-        self._rendered_order = None
-        self.display_results()
 
     def set_status(self, text, counter=None):
         """Обновляет текст статусбара внизу окна."""
@@ -2169,14 +2127,7 @@ yR1ByZ:paNHYV8EM7su - до двоеточия логин, после - паро�
         header = ctk.CTkFrame(card, fg_color="transparent")
         header.grid(row=0, column=0, columnspan=2, sticky="ew", pady=5)
 
-        fav_btn = ctk.CTkButton(
-            header,
-            text=("⭐" if item.get("is_favorite") else "☆"),
-            width=30,
-            command=lambda _it=item: self.toggle_favorite(_it),
-        )
-        fav_btn.pack(side="left", padx=(5, 5))
-        ctk.CTkLabel(header, text=item['title'], font=ctk.CTkFont(size=14, weight='bold')).pack(side="left")
+        ctk.CTkLabel(header, text=item['title'], font=ctk.CTkFont(size=14, weight='bold')).pack(side="left", padx=(5, 5))
 
         img_label = ctk.CTkLabel(card, text="")
         img_label.grid(row=1, column=0, rowspan=5, padx=5, pady=5, sticky="n")
@@ -2221,8 +2172,7 @@ yR1ByZ:paNHYV8EM7su - до двоеточия логин, после - паро�
 
     def display_results(self):
         try:
-            fav_only = self.favorites_only_var.get() if hasattr(self, 'favorites_only_var') else False
-            visible_items = [it for it in self.all_items if (not fav_only) or it.get("is_favorite")]
+            visible_items = list(self.all_items)
             visible_ids = [it["id"] for it in visible_items]
 
             # Fast path: тот же список в том же порядке - ничего не пересобираем,
