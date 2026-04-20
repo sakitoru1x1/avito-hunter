@@ -26,6 +26,7 @@ from logger_setup import logger
 from telegram import TelegramNotifier
 from driver import DriverManager
 from storage import save_data, load_data, clear_history_files, update_all_items
+from errors import format_user_error, should_retry, backoff_seconds
 import database
 
 ctk.set_appearance_mode("dark")
@@ -1428,11 +1429,33 @@ yR1ByZ:paNHYV8EM7su - до двоеточия логин, после - паро�
 
         except Exception as e:
             error_trace = traceback.format_exc()
-            self.log(f"Ошибка парсинга: {str(e)}")
+            user_msg = format_user_error(e, context="parser")
+            self.log(user_msg)
             logger.error(f"Ошибка парсинга: {error_trace}")
-            self.send_tg_status(f"❌ Ошибка: {str(e)}")
+            self.send_tg_status(user_msg)
             self.send_error_telegram(error_trace)
-            self.set_status(f"❌ Ошибка: {str(e)[:60]}")
+            self.set_status(user_msg[:80])
+
+            # --- 1.4 Recovery: задержка при 429/403 от Авито + перезапуск Chrome если сессия мертва ---
+            if should_retry(e):
+                try:
+                    from selenium.common.exceptions import WebDriverException
+                    if isinstance(e, WebDriverException):
+                        self.log("🔄 Перезапускаем браузер...")
+                        self.driver_manager.cleanup()
+                    msg_l = str(e).lower()
+                    if any(s in msg_l for s in ("429", "403", "too many", "rate limit")):
+                        wait = backoff_seconds(getattr(self, "_avito_block_attempts", 0))
+                        self._avito_block_attempts = getattr(self, "_avito_block_attempts", 0) + 1
+                        self.set_status(f"⏸ Авито блокирует. Жду {wait} сек перед повтором...")
+                        self.log(f"⏸ Backoff {wait} сек (попытка {self._avito_block_attempts})")
+                        time.sleep(wait)
+                    else:
+                        self._avito_block_attempts = 0
+                except Exception:
+                    pass
+            else:
+                self._avito_block_attempts = 0
         finally:
             self.progress.stop()
             self.start_button.configure(state='normal')

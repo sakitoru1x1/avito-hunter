@@ -2,6 +2,7 @@ from datetime import datetime
 
 import database
 from logger_setup import logger
+from errors import format_user_error
 
 
 _initialized = False
@@ -20,7 +21,7 @@ def _ensure_initialized(log_callback=None):
     except Exception as e:
         logger.error(f"Ошибка инициализации БД: {e}")
         if log_callback:
-            log_callback(f"Ошибка инициализации БД: {e}")
+            log_callback(format_user_error(e, context="db"))
         raise
 
 
@@ -33,7 +34,7 @@ def save_data(all_items, log_callback=None, search_query=None):
             log_callback(f"История сохранена ({len(all_items)} объявлений)")
     except Exception as e:
         if log_callback:
-            log_callback(f"Ошибка сохранения истории: {e}")
+            log_callback(format_user_error(e, context="db"))
         logger.error(f"Ошибка сохранения истории: {e}")
 
 
@@ -51,7 +52,7 @@ def load_data(max_items, log_callback=None):
         return items
     except Exception as e:
         if log_callback:
-            log_callback(f"Ошибка загрузки истории: {e}")
+            log_callback(format_user_error(e, context="db"))
         logger.error(f"Ошибка загрузки истории: {e}")
         return []
 

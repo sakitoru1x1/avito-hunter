@@ -5,6 +5,7 @@ import requests
 from config import SETTINGS_FILE
 from utils import sanitize_error_for_telegram
 from logger_setup import logger
+from errors import format_user_error
 
 
 def build_proxies_dict(settings):
@@ -97,10 +98,11 @@ class TelegramNotifier:
             response = requests.get(url, timeout=10, proxies=self.proxies)
             if response.status_code == 200:
                 return True, "Подключение успешно"
-            else:
-                return False, f"Ошибка {response.status_code}: {response.text}"
+            if response.status_code == 401:
+                return False, "Неверный токен. Проверьте его в @BotFather."
+            return False, f"Telegram ответил {response.status_code}: {response.text[:200]}"
         except Exception as e:
-            return False, str(e)
+            return False, format_user_error(e, context="telegram")
 
 
 def send_crash_report_to_telegram(error_text):

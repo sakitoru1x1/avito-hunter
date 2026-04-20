@@ -14,6 +14,7 @@ from selenium.common.exceptions import WebDriverException
 
 from config import USER_AGENTS
 from logger_setup import logger
+from errors import format_user_error
 
 
 class DriverManager:
@@ -131,7 +132,7 @@ chrome.webRequest.onAuthRequired.addListener(
         except Exception as e:
             error_trace = traceback.format_exc()
             if log_callback:
-                log_callback(f"Ошибка создания драйвера: {str(e)}")
+                log_callback(format_user_error(e, context="driver"))
             logger.error(f"Ошибка создания драйвера: {error_trace}")
             return None
 
