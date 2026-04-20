@@ -165,8 +165,6 @@ class ParserApp:
         row5.pack(fill="x", pady=5)
         self.start_button = ctk.CTkButton(row5, text="▶ Начать", command=self.start_parsing)
         self.start_button.pack(side="left", padx=2)
-        self.auto_button = ctk.CTkButton(row5, text="🔄 Авто", command=self.toggle_auto_update)
-        self.auto_button.pack(side="left", padx=2)
         self.stop_button = ctk.CTkButton(row5, text="⏹ Стоп", command=self.stop_parsing_handler, state='disabled')
         self.stop_button.pack(side="left", padx=2)
         self.kill_button = ctk.CTkButton(
@@ -2320,42 +2318,39 @@ yR1ByZ:paNHYV8EM7su - до двоеточия логин, после - паро�
             self.log("Цена должна быть числом")
             return
 
-        self.stop_parsing = False
-        self.start_button.configure(state='disabled')
-        self.stop_button.configure(state='normal')
-        self.kill_button.configure(state='normal')
-        self.progress.start()
-        self.log("Ручной парсинг...")
-        self.set_status(f"🔍 Ищем: {query}")
-        threading.Thread(target=self.run_parser, args=(query, min_price, max_price, city), daemon=True).start()
-
-    def toggle_auto_update(self):
-        if not self.auto_update:
+        # Режим определяется интервалом:
+        # пусто или 0 - разовый парсинг, иначе цикл с этим интервалом.
+        min_i_str = self.min_interval.get().strip()
+        max_i_str = self.max_interval.get().strip()
+        auto_mode = False
+        if min_i_str or max_i_str:
             try:
-                min_i = float(self.min_interval.get())
-                max_i = float(self.max_interval.get())
-                if min_i <= 0 or max_i < min_i:
-                    self.log("Неверный интервал")
+                min_i = float(min_i_str) if min_i_str else 0
+                max_i = float(max_i_str) if max_i_str else min_i
+                if min_i > 0 and max_i >= min_i:
+                    auto_mode = True
+                elif min_i > 0 or max_i > 0:
+                    self.log("Неверный интервал (макс должен быть ≥ мин)")
                     return
             except ValueError:
                 self.log("Интервал должен быть числом")
                 return
-            self.auto_update = True
-            self.auto_button.configure(text="Автообновление вкл", state='disabled')
-            self.stop_button.configure(state='normal')
-            self.kill_button.configure(state='normal')
-            self.log("Автообновление запущено")
-            self.run_auto_parsing()
-        else:
-            self.stop_auto_update()
+
+        self.stop_parsing = False
+        self.auto_update = auto_mode
+        self.start_button.configure(state='disabled')
+        self.stop_button.configure(state='normal')
+        self.kill_button.configure(state='normal')
+        self.progress.start()
+        self.log("🔄 Автопарсинг запущен" if auto_mode else "Разовый парсинг...")
+        self.set_status(f"🔍 Ищем: {query}")
+        threading.Thread(target=self.run_parser, args=(query, min_price, max_price, city), daemon=True).start()
 
     def stop_auto_update(self):
         self.auto_update = False
-        self.auto_button.configure(text="Автообновление", state='normal')
         if not self.driver_manager.driver or not self.stop_parsing:
             self.stop_button.configure(state='disabled')
             self.kill_button.configure(state='disabled')
-        self.log("Автообновление остановлено")
 
     def stop_parsing_handler(self):
         self.stop_parsing = True
@@ -2369,7 +2364,6 @@ yR1ByZ:paNHYV8EM7su - до двоеточия логин, после - паро�
         который глушится в run_parser по флагу stop_parsing."""
         self.stop_parsing = True
         self.auto_update = False
-        self.auto_button.configure(text="Автообновление", state='normal')
         self.log("⏹⏹ Жёсткая остановка, убиваем браузер...")
         self.send_tg_status("⏹⏹ Парсер жёстко остановлен")
         self.set_status("⏹⏹ Убито")
