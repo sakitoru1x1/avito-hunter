@@ -165,10 +165,8 @@ class ParserApp:
         row5.pack(fill="x", pady=5)
         self.start_button = ctk.CTkButton(row5, text="▶ Начать", command=self.start_parsing)
         self.start_button.pack(side="left", padx=2)
-        self.stop_button = ctk.CTkButton(row5, text="⏹ Стоп", command=self.stop_parsing_handler, state='disabled')
-        self.stop_button.pack(side="left", padx=2)
         self.kill_button = ctk.CTkButton(
-            row5, text="⏹⏹ Убить", fg_color="#7a2a2a", hover_color="#a03030",
+            row5, text="⏹ Стоп", fg_color="#7a2a2a", hover_color="#a03030",
             command=self.hard_stop_handler, state='disabled', width=90,
         )
         self.kill_button.pack(side="left", padx=2)
@@ -1147,10 +1145,8 @@ yR1ByZ:paNHYV8EM7su - до двоеточия логин, после - паро�
             self.log(f"⏸ {reason} - парсинг пропущен")
             self.send_tg_status(f"⏸ {reason}")
             self.progress.stop()
-            self.start_button.configure(state='normal')
             if not self.auto_update:
-                self.stop_button.configure(state='disabled')
-                self.kill_button.configure(state='disabled')
+                self._set_idle_ui()
             if self.auto_update:
                 self.root.after(100, self.schedule_next_auto)
             return
@@ -1160,9 +1156,7 @@ yR1ByZ:paNHYV8EM7su - до двоеточия логин, после - паро�
         if not self.driver_manager.ensure_driver(proxy_settings, self.log):
             self.log("Не удалось создать драйвер. Парсинг невозможен.")
             self.progress.stop()
-            self.start_button.configure(state='normal')
-            self.stop_button.configure(state='disabled')
-            self.kill_button.configure(state='disabled')
+            self._set_idle_ui()
             return
 
         driver = self.driver_manager.driver
@@ -1480,10 +1474,8 @@ yR1ByZ:paNHYV8EM7su - до двоеточия логин, после - паро�
                 self._avito_block_attempts = 0
         finally:
             self.progress.stop()
-            self.start_button.configure(state='normal')
             if not self.auto_update:
-                self.stop_button.configure(state='disabled')
-                self.kill_button.configure(state='disabled')
+                self._set_idle_ui()
             if self.auto_update:
                 self.root.after(100, self.schedule_next_auto)
 
@@ -2300,6 +2292,18 @@ yR1ByZ:paNHYV8EM7su - до двоеточия логин, после - паро�
                 pass
 
     # ---------- Управление парсингом ----------
+    def _set_busy_ui(self):
+        self.start_button.configure(state='disabled')
+        self.clear_history_button.configure(state='disabled')
+        self.save_as_profile_button.configure(state='disabled')
+        self.kill_button.configure(state='normal')
+
+    def _set_idle_ui(self):
+        self.start_button.configure(state='normal')
+        self.clear_history_button.configure(state='normal')
+        self.save_as_profile_button.configure(state='normal')
+        self.kill_button.configure(state='disabled')
+
     def start_parsing(self):
         query = self.query_entry.get().strip()
         min_price_str = self.min_price_entry.get().strip()
@@ -2339,9 +2343,7 @@ yR1ByZ:paNHYV8EM7su - до двоеточия логин, после - паро�
 
         self.stop_parsing = False
         self.auto_update = auto_mode
-        self.start_button.configure(state='disabled')
-        self.stop_button.configure(state='normal')
-        self.kill_button.configure(state='normal')
+        self._set_busy_ui()
         self.progress.start()
         self.log("🔄 Автопарсинг запущен" if auto_mode else "Разовый парсинг...")
         self.set_status(f"🔍 Ищем: {query}")
@@ -2353,15 +2355,7 @@ yR1ByZ:paNHYV8EM7su - до двоеточия логин, после - паро�
     def stop_auto_update(self):
         self.auto_update = False
         if not self.driver_manager.driver or not self.stop_parsing:
-            self.stop_button.configure(state='disabled')
-            self.kill_button.configure(state='disabled')
-
-    def stop_parsing_handler(self):
-        self.stop_parsing = True
-        self.stop_auto_update()
-        self.log("⏹️ Запрос на остановку парсинга отправлен")
-        self.send_tg_status("⏹️ Парсер остановлен")
-        self.set_status("⏹ Остановлено")
+            self._set_idle_ui()
 
     def hard_stop_handler(self):
         """Жёсткая остановка: убиваем драйвер, поток падает с exception,
@@ -2380,9 +2374,7 @@ yR1ByZ:paNHYV8EM7su - до двоеточия логин, после - паро�
             self.driver_manager.hard_kill()
         except Exception as e:
             logger.error(f"Ошибка при жёстком стопе: {e}")
-        self.root.after(0, lambda: self.stop_button.configure(state='disabled'))
-        self.root.after(0, lambda: self.kill_button.configure(state='disabled'))
-        self.root.after(0, lambda: self.start_button.configure(state='normal'))
+        self.root.after(0, self._set_idle_ui)
         self.root.after(0, self.progress.stop)
 
     def run_auto_parsing(self):
