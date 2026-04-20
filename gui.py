@@ -1350,7 +1350,7 @@ yR1ByZ:paNHYV8EM7su - до двоеточия логин, после - паро�
                 if current_position > last_height:
                     current_position = last_height
                 driver.execute_script(f"window.scrollTo(0, {current_position});")
-                time.sleep(random.uniform(0.2, 0.6))
+                time.sleep(random.uniform(0.5, 1.2))
                 if self.stop_parsing:
                     return
 
@@ -1368,33 +1368,30 @@ yR1ByZ:paNHYV8EM7su - до двоеточия логин, после - паро�
             self.log("Прокрутка завершена")
 
             # Ждём пока подгрузятся src картинок (Avito лениво их загружает).
-            # Проверяем что у всех <img> в карточках src не placeholder (не data:...)
-            # и что картинка прогрузилась (complete + naturalWidth > 0).
-            # Если застряли - прокручиваем к неготовой карточке, чтобы IntersectionObserver
-            # Avito её заметил и подгрузил.
+            # "Готова" = src или srcset не placeholder (не data:...).
+            # Это мягче чем требовать img.complete - наша задача вытащить URL,
+            # а декодирование браузер доделает сам.
             check_img_js = """
                 const cards = document.querySelectorAll("[data-marker='item']");
                 let ready = 0, total = cards.length;
-                const pending = [];
-                for (let i = 0; i < cards.length; i++) {
-                    const c = cards[i];
+                for (const c of cards) {
                     const img = c.querySelector("img[data-marker='image']") || c.querySelector("img");
                     if (!img) { ready++; continue; }
                     const src = img.getAttribute('src') || '';
-                    const hasRealSrc = src && !src.startsWith('data:');
-                    const loaded = img.complete && img.naturalWidth > 0;
-                    if (hasRealSrc && loaded) {
-                        ready++;
-                    } else {
-                        pending.push(i);
-                    }
+                    const srcset = img.getAttribute('srcset') || '';
+                    const hasReal = (src && !src.startsWith('data:')) ||
+                                    (srcset && srcset.split(',').some(s => {
+                                        const u = s.trim().split(' ')[0];
+                                        return u && !u.startsWith('data:');
+                                    }));
+                    if (hasReal) ready++;
                 }
-                return {ready: ready, total: total, pending: pending};
+                return {ready: ready, total: total};
             """
             deadline = time.time() + 15.0
-            nudge_passes = 0
             last_ready, last_total = 0, 0
-            prev_ready = -1
+            nudges_done = 0
+            next_nudge_at = time.time() + 1.5
             while time.time() < deadline:
                 if self.stop_parsing:
                     return
@@ -1402,7 +1399,6 @@ yR1ByZ:paNHYV8EM7su - до двоеточия логин, после - паро�
                     stats = driver.execute_script(check_img_js)
                     last_ready = stats.get("ready", 0)
                     last_total = stats.get("total", 0)
-                    pending = stats.get("pending", [])
                 except Exception:
                     break
                 if last_total == 0:
@@ -1410,24 +1406,19 @@ yR1ByZ:paNHYV8EM7su - до двоеточия логин, после - паро�
                 if last_ready / last_total >= 0.95:
                     self.log(f"Картинки готовы: {last_ready}/{last_total}")
                     break
-                # Прогресса нет - подталкиваем lazy-loader.
-                # Первые 3 прохода прокручиваем к неготовым карточкам,
-                # чтобы IntersectionObserver их триггернул.
-                if last_ready == prev_ready and pending and nudge_passes < 4:
+                # Периодический nudge bottom→top - триггерит IntersectionObserver
+                # сразу для всех карточек. До 3 проходов, раз в ~1.5с.
+                if time.time() >= next_nudge_at and nudges_done < 3:
                     try:
-                        # берём несколько разных карточек из pending
-                        idxs = pending[:: max(1, len(pending) // 4)][:4]
-                        for idx in idxs:
-                            driver.execute_script(
-                                "const cards = document.querySelectorAll(\"[data-marker='item']\");"
-                                "if (cards[arguments[0]]) cards[arguments[0]].scrollIntoView({block:'center', behavior:'instant'});",
-                                idx,
-                            )
-                            time.sleep(0.2)
-                        nudge_passes += 1
+                        driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
+                        time.sleep(0.4)
+                        driver.execute_script("window.scrollTo(0, document.body.scrollHeight / 2);")
+                        time.sleep(0.3)
+                        driver.execute_script("window.scrollTo(0, 0);")
+                        nudges_done += 1
+                        next_nudge_at = time.time() + 1.5
                     except Exception:
                         pass
-                prev_ready = last_ready
                 time.sleep(0.4)
             if last_total > 0 and last_ready / last_total < 0.95:
                 self.log(f"⚠️ Картинки догрузились частично: {last_ready}/{last_total} - продолжаем")
