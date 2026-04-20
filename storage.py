@@ -69,8 +69,6 @@ def clear_history_files():
 def update_all_items(all_items, new_items, max_items, log_callback=None):
     """Обновляет список объявлений новыми данными. Возвращает (обновлённый список, кол-во новых)."""
     if not new_items:
-        if log_callback:
-            log_callback("⚠️ Предупреждение: new_items пуст, обновление списка пропущено")
         return all_items, 0
 
     existing_ids = {item["id"] for item in all_items}
