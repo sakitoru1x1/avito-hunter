@@ -110,7 +110,7 @@ class ParserApp:
         ctk.CTkLabel(search_left, text="Критерии поиска", font=ctk.CTkFont(weight="bold")).pack(pady=(5, 0))
 
         row1 = ctk.CTkFrame(search_left)
-        row1.pack(fill="x", pady=2)
+        row1.pack(fill="x", pady=2, padx=8)
         ctk.CTkLabel(row1, text="Город:").pack(side="left", padx=2)
         self.city_var = tk.StringVar(value="Москва")
         self.city_combo = ctk.CTkComboBox(row1, variable=self.city_var, values=CITIES, state="readonly")
@@ -123,21 +123,21 @@ class ParserApp:
         self.all_russia_cb.pack(side="left", padx=10)
 
         row2 = ctk.CTkFrame(search_left)
-        row2.pack(fill="x", pady=2)
+        row2.pack(fill="x", pady=2, padx=8)
         ctk.CTkLabel(row2, text="Запрос:").pack(side="left", padx=2)
         self.query_entry = ctk.CTkEntry(row2, width=30*8)
         self.query_entry.pack(side="left", padx=2, fill="x", expand=True)
         self.query_entry.insert(0, "")
 
         row2b = ctk.CTkFrame(search_left)
-        row2b.pack(fill="x", pady=2)
+        row2b.pack(fill="x", pady=2, padx=8)
         ctk.CTkLabel(row2b, text="Игнор:").pack(side="left", padx=2)
         self.ignore_entry = ctk.CTkEntry(row2b, width=30*8,
                                           placeholder_text="через запятую: 3s, б/у, сломан")
         self.ignore_entry.pack(side="left", padx=2, fill="x", expand=True)
 
         row3 = ctk.CTkFrame(search_left)
-        row3.pack(fill="x", pady=2)
+        row3.pack(fill="x", pady=2, padx=8)
         ctk.CTkLabel(row3, text="Цена от:").pack(side="left", padx=2)
         self.min_price_entry = ctk.CTkEntry(row3, width=8*8)
         self.min_price_entry.pack(side="left", padx=2)
@@ -153,7 +153,7 @@ class ParserApp:
         ctk.CTkLabel(search_right, text="Управление", font=ctk.CTkFont(weight="bold")).pack(pady=(5, 0))
 
         row4 = ctk.CTkFrame(search_right)
-        row4.pack(fill="x", pady=2)
+        row4.pack(fill="x", pady=2, padx=8)
         self.notify_cb = ctk.CTkCheckBox(row4, text="Звук", variable=self.notify_var)
         self.notify_cb.pack(side="left", padx=2)
         self.filter_cb = ctk.CTkCheckBox(row4, text="Убрать услуги", variable=self.filter_services_var)
@@ -162,7 +162,7 @@ class ParserApp:
         self.delivery_cb.pack(side="left", padx=2)
 
         row5 = ctk.CTkFrame(search_right)
-        row5.pack(fill="x", pady=5)
+        row5.pack(fill="x", pady=5, padx=8)
         self.start_button = ctk.CTkButton(row5, text="▶ Начать", command=self.start_parsing)
         self.start_button.pack(side="left", padx=2)
         self.kill_button = ctk.CTkButton(
@@ -172,7 +172,7 @@ class ParserApp:
         self.kill_button.pack(side="left", padx=2)
 
         row5b = ctk.CTkFrame(search_right)
-        row5b.pack(fill="x", pady=2)
+        row5b.pack(fill="x", pady=2, padx=8)
         self.clear_history_button = ctk.CTkButton(row5b, text="🗑 Очистить историю", command=self.clear_history)
         self.clear_history_button.pack(side="left", padx=2)
         self.save_as_profile_button = ctk.CTkButton(row5b, text="💾 Сохранить как профиль",
@@ -180,7 +180,7 @@ class ParserApp:
         self.save_as_profile_button.pack(side="left", padx=2)
 
         row7 = ctk.CTkFrame(search_right)
-        row7.pack(fill="x", pady=2)
+        row7.pack(fill="x", pady=2, padx=8)
         ctk.CTkLabel(row7, text="Интервал (мин): от").pack(side="left", padx=2)
         self.min_interval = ctk.CTkEntry(row7, width=4*8)
         self.min_interval.pack(side="left", padx=2)
