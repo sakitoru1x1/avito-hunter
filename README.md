@@ -203,17 +203,132 @@ python main.py
 
 ---
 
-## Модули (для любопытных)
+## Для специалистов — технические подробности
 
-- `main.py` - точка входа
-- `gui.py` - интерфейс (CustomTkinter)
-- `database.py` - работа с SQLite
-- `driver.py` - менеджер Selenium-драйвера Chrome
-- `telegram.py` - отправка уведомлений в Telegram
-- `storage.py` - экспорт/импорт JSON, обновление списка
-- `utils.py` - вспомогательные функции
-- `config.py` - константы
-- `logger_setup.py` - логирование
+<details>
+<summary>Развернуть технический раздел: архитектура, оптимизации, внутреннее устройство</summary>
+
+### Общая архитектура
+
+Программа состоит из нескольких слабосвязанных модулей, объединённых через `gui.py` как точку оркестрации. Парсинг выполняется в фоновом потоке, UI — в главном; коммуникация идёт через `root.after(...)` и разделяемое состояние `self.all_items`.
+
+| Модуль | Ответственность |
+|---|---|
+| `main.py` | Точка входа, инициализация CustomTkinter |
+| `gui.py` | UI (CustomTkinter), оркестрация парсинга, рендер карточек, авто-обновление, расписание |
+| `driver.py` | Менеджер Selenium-драйвера Chrome: запуск, переподключение к упавшей сессии, прокси, undetected_chromedriver |
+| `database.py` | SQLite: схема, `get_conn()` с `PRAGMA journal_mode=WAL` и `synchronous=NORMAL`, батч-транзакции |
+| `storage.py` | Мердж списка новых результатов со старыми (`update_all_items`), выставление `is_new`, экспорт/импорт JSON |
+| `telegram.py` | HTTP-клиент к Bot API: изолированная `requests.Session` с `trust_env=False`, ретраи на флаковом VPN |
+| `errors.py` | `format_user_error(exc, context)` — превращает raw-исключения в читаемые для юзера сообщения; `should_retry`, `backoff_seconds` |
+| `utils.py` | Парсинг дат (`сегодня`, `вчера`, `2 часа назад` → timestamp), санитайзеры для HTML в Telegram |
+| `config.py` | Константы: `SETTINGS_FILE`, `DB_FILE`, USER_AGENTS и т.п. |
+| `logger_setup.py` | Ротация логов, глобальный обработчик с отправкой краш-репорта в Telegram |
+
+### Telegram-уведомления: устойчивость к VPN
+
+Ключевая проблема — при включённом VPN-клиенте (OpenVPN/WireGuard) системные переменные `HTTPS_PROXY`/`HTTP_PROXY`/`NO_PROXY` подставляются драйвером и ломают маршрут до `api.telegram.org`. Решение — изолированная сессия:
+
+```python
+def _make_session():
+    s = requests.Session()
+    s.trust_env = False
+    return s
+```
+
+Поверх этого — обёртка с ретраями на `Timeout`/`ConnectionError` (`_post_with_retry` в `telegram.py`), backoff = 3, 6 секунд, таймаут `sendMessage` = 30s, `sendPhoto` = 45/60s. Этого хватает, чтобы пережить секундные замирания VPN-туннеля без потери уведомлений.
+
+Прокси для Telegram отделён от основного прокси для Avito (`tg_proxy_*` в settings) — типичный кейс: РФ-прокси для Авито + зарубежный для обхода блокировки Bot API.
+
+*Диагностическое правило*: если в `parser.log` нет ошибок отправки (return 200), но юзер не видит уведомлений — проблема на стороне TG-клиента (Desktop/Mobile не пробивается через VPN), а не в нашем коде. Прописать тот же прокси в самом TG-клиенте.
+
+### Инкрементальный парсер (feat/incremental-parser)
+
+Изначально `parse_items` извлекал все поля (title, price, image_url, description, seller_rating, фильтры по цене) для каждой карточки на странице (~50-100 штук) на каждом цикле — хотя новых объявлений обычно 0-5. 95+ карточек обрабатывались впустую.
+
+Решение — двухпроходный `parse_items`, возвращающий `(full_new_items, page_summary)`:
+
+**Pass 1 (по всем карточкам, дёшево):**
+- `get_item_id` читает `data-item-id` без обращения к подэлементам
+- `extract_date` читает `[data-marker='item-date']`, прогоняется через `parse_date_to_timestamp`
+- Собирается `page_summary = [{"id", "pub_date_timestamp", "search_query"}, ...]`
+
+**Pass 2 (только для новых):**
+- Кеш `self._known_ids_cache = {item["id"] for item in self.all_items}` строится в `run_parser`
+- Полный парсинг применяется только к карточкам, чьи ID не в кеше
+
+`_detect_disappeared` работает как раньше — получает `page_summary` со всеми ID страницы и вычисляет `min_ts = min(...)` для границы страницы. VIP-блоки Авито инжектит непредсказуемо, поэтому dedup идёт через set ID (внутри `update_all_items` в `storage.py`), не через «остановиться на первом известном».
+
+### Пайплайн изображений
+
+Картинки загружаются в два этапа:
+
+**1. Извлечение URL (batch-JS + прогрессивный скролл).** Вместо того чтобы для каждой карточки дёргать `driver.find_element(...).get_attribute("src")` (50 roundtrip'ов к Chrome), выполняется один JS-скрипт, возвращающий массив `[{id, src}, ...]` со всей страницы. Перед этим делается постепенный скролл с шагом и `sleep 0.35s` — lazy-loaded `<img>` успевают подгрузить реальный `src` (не `data-src` placeholder). Fallback: если `src` пустой — берётся `data-src`.
+
+**2. Скачивание изображения (async, per-card).** При рендере карточки в `_create_card` создаётся `requests.Session` с cookies из Selenium и UA из `USER_AGENTS`. Загрузка идёт через `ThreadPoolExecutor` — UI не блокируется. На каждую карточку — отдельный future.
+
+**3. Retry старых URL.** URL на Авито бывают подписанными и истекают. Если при загрузке картинки прилетает 403 — на следующем цикле парсинга этот ID попадает в `retry_updated_items`, его URL переизвлекается заново и перезаписывается в БД.
+
+### Оптимизации БД
+
+SQLite изначально настроен на скорость:
+- `PRAGMA journal_mode=WAL` — writers не блокируют readers
+- `PRAGMA synchronous=NORMAL` — fsync после транзакции, не после каждой записи
+- `save_ads` оборачивает все upsert'ы в одну транзакцию (`with get_conn()`)
+
+*Узкое место, которое устранили:* `save_data(self.all_items)` на каждом цикле парсинга писал все 500+ строк вне зависимости от того, изменилось что-то или нет. Заменено на:
+
+```python
+dirty = []
+if new_results:
+    dirty.extend(new_results)
+if retry_updated_items:
+    dirty.extend(retry_updated_items)
+# дедуп по id
+if dirty:
+    save_data(dirty, self.log)
+```
+
+Теперь типичный цикл «0 новых» = 0 записей в БД. `last_seen` не трогаем при каждом проходе (нигде не используется как фильтр, можно обновлять лениво).
+
+Hover-handler на карточке раньше делал `save_data(self.all_items)` при каждом `<Enter>` (писал всё). Заменено на `database.upsert_ad(_item)` — одна строка.
+
+### Оптимизации GUI (fast-path в display_results)
+
+CustomTkinter не умеет инкрементально обновлять список карточек — при перерисовке приходится уничтожать старые `CTkFrame` и создавать новые. Для 50 карточек × несколько `CTkWidget` в каждой это ~0.3-1 сек лага на каждый цикл авто-обновления, даже когда ничего не изменилось.
+
+Решение — fast-path:
+
+```python
+def display_results(self):
+    visible_items = [it for it in self.all_items if (not fav_only) or it.get("is_favorite")]
+    visible_ids = [it["id"] for it in visible_items]
+
+    # Fast path: тот же порядок ID → только синхронизируем is_new цвет
+    if self._rendered_order == visible_ids and self._rendered_cards is not None:
+        for id_, info in self._rendered_cards.items():
+            new_is_new = items_by_id[id_].get("is_new", False)
+            if info["state"]["is_new"] != new_is_new:
+                info["state"]["is_new"] = new_is_new
+                info["card"].configure(fg_color=info["get_color"]())
+        return
+
+    # Slow path: полный ребилд + запоминаем _rendered_cards/_rendered_order
+```
+
+Инвалидация fast-path (`self._rendered_order = None`) вызывается только когда реально нужно: новые объявления, retry-обновления, переключение избранного, смена профиля поиска.
+
+Типичный кейс «авто-цикл, 0 новых» = 0 destroy/create виджетов, только обход словаря с проверкой `is_new`.
+
+### Фоновой поток парсинга
+
+`run_parser` крутится в `threading.Thread(daemon=True)`. Взаимодействие с Tk — только через `self.root.after(0, lambda: ...)`. Состояние `self.all_items` читается/пишется из обоих потоков, но т.к. Python GIL и операции над списком атомарны, блокировки не нужны. Если парсинг упал — исключение ловится в try/except верхнего уровня, `format_user_error` даёт юзеру понятное сообщение, полный traceback идёт в `parser.log`.
+
+### Глобальный краш-репорт
+
+В `logger_setup.py` установлен `sys.excepthook`, который при падении главного потока формирует traceback, санитизирует его (`sanitize_error_for_telegram`) и шлёт в Telegram через отдельную сессию (`trust_env=False`). Это работает даже если `gui.py` успел упасть — важно для дебага у юзеров, которые не умеют читать `parser.log`.
+
+</details>
 
 ---
 
