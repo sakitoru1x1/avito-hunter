@@ -3,7 +3,6 @@
 DATA_FILE = "avito_history.json"
 BACKUP_FILE = "avito_history_backup.json"
 DB_FILE = "avito_data.db"
-QUEUE_DB_FILE = "avito_queue.db"
 SETTINGS_FILE = "settings.json"
 DEFAULT_MAX_ITEMS = 500
 
