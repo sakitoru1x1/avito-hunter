@@ -44,27 +44,31 @@ CREATE TABLE IF NOT EXISTS price_history (
     FOREIGN KEY (ad_id) REFERENCES ads(id) ON DELETE CASCADE
 );
 
+CREATE TABLE IF NOT EXISTS notifications_queue (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    type TEXT NOT NULL,
+    payload_json TEXT NOT NULL,
+    attempts INTEGER DEFAULT 0,
+    next_retry_at REAL NOT NULL,
+    created_at REAL NOT NULL,
+    max_attempts INTEGER DEFAULT 3,
+    last_error TEXT
+);
+
 CREATE INDEX IF NOT EXISTS idx_ads_pub_date ON ads(pub_date_timestamp DESC);
 CREATE INDEX IF NOT EXISTS idx_ads_search_query ON ads(search_query);
 CREATE INDEX IF NOT EXISTS idx_price_history_ad_id ON price_history(ad_id);
+CREATE INDEX IF NOT EXISTS idx_notif_queue_next_retry ON notifications_queue(next_retry_at);
 """
-
-
-_BUSY_TIMEOUT_MS = 30000
-
-
-def _configure(conn):
-    conn.row_factory = sqlite3.Row
-    conn.execute(f"PRAGMA busy_timeout = {_BUSY_TIMEOUT_MS}")
-    conn.execute("PRAGMA journal_mode = WAL")
-    conn.execute("PRAGMA synchronous = NORMAL")
 
 
 @contextmanager
 def get_conn():
-    conn = sqlite3.connect(DB_FILE, timeout=_BUSY_TIMEOUT_MS / 1000)
-    _configure(conn)
+    conn = sqlite3.connect(DB_FILE)
+    conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
+    conn.execute("PRAGMA journal_mode = WAL")
+    conn.execute("PRAGMA synchronous = NORMAL")
     try:
         yield conn
         conn.commit()
@@ -78,13 +82,13 @@ def get_conn():
 def init_db():
     with get_conn() as conn:
         conn.executescript(SCHEMA)
+        # Миграции: добавление новых колонок если их ещё нет
         cur = conn.execute("PRAGMA table_info(ads)")
         cols = {row["name"] for row in cur.fetchall()}
         if "is_favorite" not in cols:
             conn.execute("ALTER TABLE ads ADD COLUMN is_favorite INTEGER DEFAULT 0")
         if "seller_rating" not in cols:
             conn.execute("ALTER TABLE ads ADD COLUMN seller_rating REAL")
-        conn.execute("DROP TABLE IF EXISTS notifications_queue")
 
 
 def _row_to_item(row):
@@ -369,3 +373,77 @@ def migrate_from_json():
 
     logger.info(f"Миграция из JSON завершена: {migrated} объявлений")
     return migrated
+
+
+# ---------- Очередь уведомлений ----------
+
+def queue_enqueue(type_, payload_json, max_attempts=3):
+    """Кладёт строку в очередь, готовую к немедленной отправке."""
+    import time as _t
+    now = _t.time()
+    with get_conn() as conn:
+        cur = conn.execute(
+            "INSERT INTO notifications_queue "
+            "(type, payload_json, attempts, next_retry_at, created_at, max_attempts) "
+            "VALUES (?, ?, 0, ?, ?, ?)",
+            (type_, payload_json, now, now, max_attempts),
+        )
+        return cur.lastrowid
+
+
+def queue_fetch_ready(now_ts, limit=1):
+    """Возвращает готовые к отправке строки (next_retry_at <= now), по возрасту."""
+    with get_conn() as conn:
+        cur = conn.execute(
+            "SELECT id, type, payload_json, attempts, max_attempts, created_at "
+            "FROM notifications_queue "
+            "WHERE next_retry_at <= ? "
+            "ORDER BY next_retry_at ASC LIMIT ?",
+            (now_ts, limit),
+        )
+        return [dict(r) for r in cur.fetchall()]
+
+
+def queue_next_scheduled_at():
+    """Время ближайшего next_retry_at (или None если очередь пуста)."""
+    with get_conn() as conn:
+        cur = conn.execute(
+            "SELECT MIN(next_retry_at) AS t FROM notifications_queue"
+        )
+        row = cur.fetchone()
+        return row["t"] if row and row["t"] is not None else None
+
+
+def queue_mark_failed(row_id, err, next_retry_at):
+    """Инкрементирует attempts и откладывает попытку."""
+    with get_conn() as conn:
+        conn.execute(
+            "UPDATE notifications_queue "
+            "SET attempts = attempts + 1, next_retry_at = ?, last_error = ? "
+            "WHERE id = ?",
+            (next_retry_at, (err or "")[:500], row_id),
+        )
+
+
+def queue_delete(row_id):
+    with get_conn() as conn:
+        conn.execute("DELETE FROM notifications_queue WHERE id = ?", (row_id,))
+
+
+def queue_count_pending():
+    with get_conn() as conn:
+        cur = conn.execute("SELECT COUNT(*) AS c FROM notifications_queue")
+        row = cur.fetchone()
+        return row["c"] if row else 0
+
+
+def queue_purge_old(max_age_days=7):
+    """Чистит висяки старше N дней (последняя защита от роста БД)."""
+    import time as _t
+    cutoff = _t.time() - max_age_days * 86400
+    with get_conn() as conn:
+        cur = conn.execute(
+            "DELETE FROM notifications_queue WHERE created_at < ?",
+            (cutoff,),
+        )
+        return cur.rowcount
