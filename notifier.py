@@ -28,12 +28,21 @@ _BACKOFF = [5, 15, 30, 60, 120, 300, 600, 1200, 1800, 3600]
 # Пороги max_attempts для разных типов сообщений.
 _MAX_ATTEMPTS = {
     "new_item": 20,
+    "new_item_desc": 20,
     "new_items_header": 10,
     "disappeared_batch": 10,
     "status": 3,
     "error": 3,
     "raw": 3,
 }
+
+# Пауза между успешными отправками - TG лимит ~1 сообщение/сек на чат.
+# Меньше - рискуем словить 429 flood_control и уйти в длинный backoff.
+_PACE_AFTER_SUCCESS = 0.7
+
+# Порог длины описания, при котором оно ещё влезает в caption фото (1024 символов)
+# с запасом под header и HTML-теги.
+_DESC_IN_CAPTION_LIMIT = 700
 
 # Timeout одной попытки из sender-потока. Короткий - пусть очередь ретраит,
 # чем мы зависаем на 30 секунд на каждом ряду.
@@ -135,10 +144,14 @@ class NotificationService:
         return True
 
     def enqueue_new_items(self, new_items, img_session):
-        """Ставит в очередь заголовок + отдельное сообщение на каждое объявление.
+        """Ставит в очередь заголовок + сообщения на каждое объявление.
 
         Картинки предзагружаются прямо сейчас (пока живы куки Selenium) и идут
         в payload_json как base64 - sender их только декодирует и аплоадит в TG.
+
+        Описание упаковывается в caption фото, если влезает в лимит TG (1024 симв).
+        Длинное описание идёт отдельным ретраимым рядом new_item_desc - так оно
+        не теряется при 429/сетевых сбоях.
         """
         if not new_items:
             return 0
@@ -155,13 +168,19 @@ class NotificationService:
                 data = self.fetch_image_bytes(img_session, img_url, max_attempts=2)
                 if data:
                     img_b64 = base64.b64encode(data).decode("ascii")
+
+            desc = item.get("description") or ""
+            if desc == "Н/Д":
+                desc = ""
+            fold_in_caption = bool(desc) and len(desc) <= _DESC_IN_CAPTION_LIMIT
+
             payload = {
                 "item": {
                     "id": item.get("id"),
                     "title": item.get("title"),
                     "price": item.get("price"),
                     "link": item.get("link"),
-                    "description": item.get("description"),
+                    "description": desc if fold_in_caption else "",
                     "date": item.get("date"),
                     "pub_date_timestamp": item.get("pub_date_timestamp", 0) or 0,
                     "first_seen": item.get("first_seen"),
@@ -170,6 +189,13 @@ class NotificationService:
             }
             self._enqueue("new_item", payload)
             enqueued += 1
+
+            if desc and not fold_in_caption:
+                self._enqueue("new_item_desc", {
+                    "title": item.get("title") or "",
+                    "description": desc,
+                })
+                enqueued += 1
         return enqueued + 1  # + заголовок
 
     def enqueue_disappeared(self, disappeared):
@@ -313,9 +339,12 @@ class NotificationService:
                     continue
 
                 row = rows[0]
-                success, err = self._deliver(row)
+                success, err, retry_after = self._deliver(row)
                 if success:
                     database.queue_delete(row["id"])
+                    # Pacing - чтобы не упереться в TG flood_control на следующем ряду.
+                    # Стоп-евент выводит из сна сразу при shutdown.
+                    self._stop.wait(_PACE_AFTER_SUCCESS)
                 else:
                     next_attempt = row["attempts"] + 1
                     if next_attempt >= row["max_attempts"]:
@@ -325,23 +354,36 @@ class NotificationService:
                         )
                         database.queue_delete(row["id"])
                     else:
-                        delay = _BACKOFF[min(next_attempt - 1, len(_BACKOFF) - 1)]
+                        if retry_after > 0:
+                            # TG сам сказал сколько ждать - слушаем его, а не наш backoff.
+                            delay = retry_after + 1
+                            self.log(
+                                f"📉 TG rate-limit: жду {delay}с "
+                                f"(тип={row['type']}, ряд #{row['id']})"
+                            )
+                        else:
+                            delay = _BACKOFF[min(next_attempt - 1, len(_BACKOFF) - 1)]
                         database.queue_mark_failed(
                             row["id"], err, time.time() + delay
                         )
-                        if self._looks_like_disconnect(err):
+                        # 429 - не разрыв связи, не гасим _tg_online
+                        if retry_after == 0 and self._looks_like_disconnect(err):
                             self._tg_online = False
             except Exception as e:
                 logger.error(f"Sender-поток упал на итерации: {e}")
                 self._wake.wait(3)
 
     def _deliver(self, row):
-        """Одна попытка отправки одной строки. Возвращает (ok, err_text)."""
+        """Одна попытка отправки одной строки. Возвращает (ok, err_text, retry_after).
+
+        retry_after > 0 означает, что TG ответил 429 с явным указанием времени -
+        sender обязан использовать его вместо экспоненциального бекоффа.
+        """
         type_ = row["type"]
         try:
             payload = json.loads(row["payload_json"])
         except Exception as e:
-            return False, f"bad payload: {e}"
+            return False, f"bad payload: {e}", 0
 
         try:
             if type_ == "status":
@@ -356,15 +398,25 @@ class NotificationService:
                 return self._send_text(payload["text"])
             if type_ == "new_item":
                 return self._send_new_item(payload)
+            if type_ == "new_item_desc":
+                return self._send_new_item_desc(payload)
             if type_ == "disappeared_batch":
                 return self._send_disappeared(payload["items"])
         except Exception as e:
-            return False, f"{type(e).__name__}: {e}"
-        return False, f"unknown type: {type_}"
+            return False, f"{type(e).__name__}: {e}", 0
+        return False, f"unknown type: {type_}", 0
+
+    @staticmethod
+    def _parse_retry_after(resp):
+        """Достаёт parameters.retry_after из тела ответа TG. Дефолт 1 если не распарсили."""
+        try:
+            return int(resp.json().get("parameters", {}).get("retry_after", 1))
+        except Exception:
+            return 1
 
     def _send_text(self, text, parse_mode="HTML"):
         if not self._notifier.enabled:
-            return False, "not enabled"
+            return False, "not enabled", 0
         try:
             url = f"{self._notifier.base_url}/sendMessage"
             resp = self._notifier.session.post(
@@ -379,14 +431,17 @@ class NotificationService:
                 proxies=self._notifier.proxies,
             )
             if resp.status_code == 200:
-                return True, ""
-            return False, f"HTTP {resp.status_code}: {resp.text[:180]}"
+                return True, "", 0
+            if resp.status_code == 429:
+                ra = self._parse_retry_after(resp)
+                return False, f"HTTP 429: retry_after={ra}", ra
+            return False, f"HTTP {resp.status_code}: {resp.text[:180]}", 0
         except Exception as e:
-            return False, f"{type(e).__name__}: {e}"
+            return False, f"{type(e).__name__}: {e}", 0
 
     def _send_photo(self, caption, photo_bytes, parse_mode="HTML"):
         if not self._notifier.enabled:
-            return False, "not enabled"
+            return False, "not enabled", 0
         try:
             url = f"{self._notifier.base_url}/sendPhoto"
             data = {"chat_id": self._notifier.chat_id, "parse_mode": parse_mode}
@@ -401,24 +456,37 @@ class NotificationService:
                 proxies=self._notifier.proxies,
             )
             if resp.status_code == 200:
-                return True, ""
-            return False, f"HTTP {resp.status_code}: {resp.text[:180]}"
+                return True, "", 0
+            if resp.status_code == 429:
+                ra = self._parse_retry_after(resp)
+                return False, f"HTTP 429: retry_after={ra}", ra
+            return False, f"HTTP {resp.status_code}: {resp.text[:180]}", 0
         except Exception as e:
-            return False, f"{type(e).__name__}: {e}"
+            return False, f"{type(e).__name__}: {e}", 0
 
-    def _send_new_item(self, payload):
-        item = payload["item"]
-        img_b64 = payload.get("image_b64")
-
-        header = f"<a href='{_esc(item['link'])}'>{_esc(item['title'])}</a>\n"
-        header += f"💰 {_esc(item['price'])} руб.\n"
+    def _build_new_item_caption(self, item):
+        caption = f"<a href='{_esc(item['link'])}'>{_esc(item['title'])}</a>\n"
+        caption += f"💰 {_esc(item['price'])} руб.\n"
         pub_ts = item.get("pub_date_timestamp", 0) or 0
         if pub_ts > 0:
             pub_str = datetime.fromtimestamp(pub_ts).strftime("%d.%m.%Y %H:%M")
         else:
             pub_str = item.get("date") or "Н/Д"
-        header += f"🕐 На Авито: {_esc(pub_str)}\n"
-        header += f"📥 В программе: {_esc(item.get('first_seen') or 'Н/Д')}"
+        caption += f"🕐 На Авито: {_esc(pub_str)}\n"
+        caption += f"📥 В программе: {_esc(item.get('first_seen') or 'Н/Д')}"
+
+        desc = item.get("description") or ""
+        if desc and desc != "Н/Д":
+            candidate = caption + f"\n\n<blockquote>{_esc(desc)}</blockquote>"
+            if len(candidate) <= 1024:
+                caption = candidate
+        return caption
+
+    def _send_new_item(self, payload):
+        """Одно фото + caption. Длинное описание уже выделено в new_item_desc."""
+        item = payload["item"]
+        img_b64 = payload.get("image_b64")
+        caption = self._build_new_item_caption(item)
 
         if img_b64:
             try:
@@ -426,33 +494,33 @@ class NotificationService:
             except Exception:
                 data = None
             if data:
-                ok, err = self._send_photo(caption=header, photo_bytes=data)
-                if not ok:
-                    # fallback на текст, но только если дело не в сети
-                    if self._looks_like_disconnect(err):
-                        return False, err
-                    ok2, err2 = self._send_text(header)
-                    if not ok2:
-                        return False, f"photo: {err}; text: {err2}"
-            else:
-                ok, err = self._send_text(header)
-                if not ok:
-                    return False, err
+                ok, err, ra = self._send_photo(caption=caption, photo_bytes=data)
+                if ok:
+                    return True, "", 0
+                # 429 или сетевой разрыв - пусть весь ряд ретраится как есть.
+                if ra > 0 or self._looks_like_disconnect(err):
+                    return False, err, ra
+                # Непрозрачная ошибка фото (невалидный JPEG, CONTENT_TYPE_INVALID)
+                # - пробуем хотя бы текстом, чтоб пользователь получил уведомление.
+                ok2, err2, ra2 = self._send_text(caption)
+                if ok2:
+                    return True, "", 0
+                return False, f"photo: {err}; text: {err2}", ra2
+        return self._send_text(caption)
+
+    def _send_new_item_desc(self, payload):
+        """Отдельное сообщение с описанием - для длинных, не влезших в caption."""
+        title = payload.get("title") or ""
+        desc = payload.get("description") or ""
+        if not desc:
+            return True, "", 0
+        if len(desc) > 3500:
+            desc = desc[:3500] + "..."
+        if title:
+            text = f"<b>{_esc(title)}</b>\n<blockquote>{_esc(desc)}</blockquote>"
         else:
-            ok, err = self._send_text(header)
-            if not ok:
-                return False, err
-
-        desc = item.get("description") or ""
-        if desc and desc != "Н/Д":
-            if len(desc) > 3500:
-                desc = desc[:3500] + "..."
-            desc_msg = f"<blockquote>{_esc(desc)}</blockquote>"
-            # Описание - best-effort: даже если упадёт, карточку не ретраим.
-            # Иначе пользователь получит дубли при повторе.
-            self._send_text(desc_msg)
-
-        return True, ""
+            text = f"<blockquote>{_esc(desc)}</blockquote>"
+        return self._send_text(text)
 
     def _send_disappeared(self, items):
         count = len(items)
@@ -474,11 +542,14 @@ class NotificationService:
             messages.append(current_msg)
         # Если любая часть упала - возвращаем False, всю пачку ретраим.
         # Чтобы не задублить - пользователь просто получит полный список ещё раз.
-        for m in messages:
-            ok, err = self._send_text(m)
+        for idx, m in enumerate(messages):
+            ok, err, ra = self._send_text(m)
             if not ok:
-                return False, err
-        return True, ""
+                return False, err, ra
+            # Пауза между частями пачки - чтоб не словить 429 внутри одного ряда.
+            if idx < len(messages) - 1:
+                self._stop.wait(_PACE_AFTER_SUCCESS)
+        return True, "", 0
 
     # ---------- Health-check loop ----------
     def _health_loop(self):
