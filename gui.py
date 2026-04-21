@@ -26,9 +26,19 @@ from utils import transliterate, parse_date_to_timestamp, sanitize_error_for_tel
 from logger_setup import logger
 from telegram import TelegramNotifier
 from driver import DriverManager
-from storage import save_data, load_data, clear_history_files, update_all_items
+from storage import save_data, clear_history_files
 from errors import format_user_error, should_retry, backoff_seconds
 import database
+
+from parser import (
+    AvitoParser,
+    is_captcha_page as _parser_is_captcha_page,
+    detect_disappeared as _parser_detect_disappeared,
+)
+from history import HistoryService
+from notifier import NotificationService
+from settings_model import load_settings as load_app_settings, save_settings as save_app_settings, AppSettings
+from params import ParseParams
 
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
@@ -47,7 +57,6 @@ class ParserApp:
         self.root.geometry(f"{win_w}x{win_h}+{x}+{y}")
         self.root.minsize(800, 600)
 
-        self.all_items = []
         self.images = []
         self.auto_update = False
         self.driver_manager = DriverManager()
@@ -58,30 +67,27 @@ class ParserApp:
         self.previous_ids = set()
         self.stop_parsing = False
         self.max_items = DEFAULT_MAX_ITEMS
-        # Карточки, которые уже прошли pass 2 и были отбракованы фильтрами (цена/слова/рейтинг).
-        # Хранится in-memory, не трогаем БД, чтобы не захламлять историю нерелевантным.
-        # Сбрасывается при смене фильтров (см. run_parser) и при рестарте программы.
-        self._filtered_ids = set()
-        self._last_filter_key = None
         self.image_executor = ThreadPoolExecutor(max_workers=4)
 
-        # In-memory кэш картинок: url -> raw bytes. Живёт пока запущена программа.
-        # Используется и карточками, и отправкой в Telegram (не перекачиваем).
-        self._img_bytes_cache = {}
-        self._img_cache_order = []
-        self._img_cache_lock = threading.Lock()
-        self._img_cache_max = 500
+        self.history = HistoryService(self.max_items, self.log)
+        self.notifier = NotificationService(self.log)
+        self.avito_parser = AvitoParser(self.log)
 
         self.notify_var = tk.BooleanVar(value=True)
         self.filter_services_var = tk.BooleanVar(value=False)
         self.delivery_var = tk.BooleanVar(value=False)
-        self.telegram_notifier = TelegramNotifier()
 
         self.create_widgets()
         self.load_settings()
+        self.history.max_items = self.max_items
         self._load_data()
         self.refresh_profiles_list()
         self._apply_active_profile_on_startup()
+
+        # Настраиваем notifier актуальным токеном/прокси и стартуем фоновый sender
+        self.update_telegram_notifier()
+        self.notifier.start_background()
+        self._refresh_tg_indicator()
 
     def create_widgets(self):
         # Статусбар (создаём первым, чтобы он пришпилился к низу)
@@ -93,6 +99,10 @@ class ParserApp:
         self.status_counter_var = tk.StringVar(value="")
         self.status_counter_label = ctk.CTkLabel(statusbar, textvariable=self.status_counter_var, anchor="e")
         self.status_counter_label.pack(side="right", padx=5, pady=2)
+        # Индикатор очереди TG - показывает сколько ждут отправки и есть ли связь
+        self.tg_indicator_var = tk.StringVar(value="")
+        self.tg_indicator_label = ctk.CTkLabel(statusbar, textvariable=self.tg_indicator_var, anchor="e")
+        self.tg_indicator_label.pack(side="right", padx=5, pady=2)
         self.progress = ctk.CTkProgressBar(statusbar, mode='indeterminate')
         self.progress.pack(side="left", fill="x", expand=True, padx=10, pady=4)
 
@@ -592,91 +602,75 @@ yR1ByZ:paNHYV8EM7su - до двоеточия логин, после - паро�
 
     # ---------- Настройки ----------
     def load_settings(self):
-        if os.path.exists(SETTINGS_FILE):
-            try:
-                with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
-                    settings = json.load(f)
-                self.telegram_token_entry.delete(0, tk.END)
-                self.telegram_token_entry.insert(0, settings.get("telegram_token", ""))
-                self.telegram_chat_id_entry.delete(0, tk.END)
-                self.telegram_chat_id_entry.insert(0, settings.get("telegram_chat_id", ""))
-                self.proxy_scheme_var.set(settings.get("proxy_scheme", "http"))
-                self.proxy_host_entry.delete(0, tk.END)
-                self.proxy_host_entry.insert(0, settings.get("proxy_host", ""))
-                self.proxy_port_entry.delete(0, tk.END)
-                self.proxy_port_entry.insert(0, settings.get("proxy_port", ""))
-                self.proxy_user_entry.delete(0, tk.END)
-                self.proxy_user_entry.insert(0, settings.get("proxy_user", ""))
-                self.proxy_pass_entry.delete(0, tk.END)
-                self.proxy_pass_entry.insert(0, settings.get("proxy_pass", ""))
-
-                # Отдельный прокси для Telegram
-                self.tg_proxy_scheme_var.set(settings.get("tg_proxy_scheme", "http"))
-                self.tg_proxy_host_entry.delete(0, tk.END)
-                self.tg_proxy_host_entry.insert(0, settings.get("tg_proxy_host", ""))
-                self.tg_proxy_port_entry.delete(0, tk.END)
-                self.tg_proxy_port_entry.insert(0, settings.get("tg_proxy_port", ""))
-                self.tg_proxy_user_entry.delete(0, tk.END)
-                self.tg_proxy_user_entry.insert(0, settings.get("tg_proxy_user", ""))
-                self.tg_proxy_pass_entry.delete(0, tk.END)
-                self.tg_proxy_pass_entry.insert(0, settings.get("tg_proxy_pass", ""))
-
-                self.tg_notify_status_var.set(settings.get("tg_notify_status", True))
-
-                # Расписание
-                self.schedule_enabled_var.set(settings.get("schedule_enabled", False))
-                sched_start = settings.get("schedule_start", "09:00")
-                sched_end = settings.get("schedule_end", "21:00")
-                self.schedule_start_entry.delete(0, tk.END)
-                self.schedule_start_entry.insert(0, sched_start)
-                self.schedule_end_entry.delete(0, tk.END)
-                self.schedule_end_entry.insert(0, sched_end)
-                sched_days = settings.get("schedule_days", [True] * 7)
-                if isinstance(sched_days, list) and len(sched_days) == 7:
-                    for i, v in enumerate(sched_days):
-                        self.schedule_day_vars[i].set(bool(v))
-
-                saved_max = int(settings.get("max_items", DEFAULT_MAX_ITEMS))
-                if saved_max <= 50:
-                    saved_max = DEFAULT_MAX_ITEMS
-                self.max_items = saved_max
-
-                self.show_browser_var.set(bool(settings.get("show_browser", False)))
-
-                self.log("✅ Настройки загружены")
-            except Exception as e:
-                self.log(f"⚠️ Ошибка загрузки настроек: {e}")
-        else:
+        if not os.path.exists(SETTINGS_FILE):
             self.log("ℹ️ Файл настроек не найден, используйте поля ввода")
+            return
+        s = load_app_settings(SETTINGS_FILE)
+
+        self.telegram_token_entry.delete(0, tk.END)
+        self.telegram_token_entry.insert(0, s.telegram_token)
+        self.telegram_chat_id_entry.delete(0, tk.END)
+        self.telegram_chat_id_entry.insert(0, s.telegram_chat_id)
+        self.proxy_scheme_var.set(s.proxy_scheme)
+        self.proxy_host_entry.delete(0, tk.END)
+        self.proxy_host_entry.insert(0, s.proxy_host)
+        self.proxy_port_entry.delete(0, tk.END)
+        self.proxy_port_entry.insert(0, s.proxy_port)
+        self.proxy_user_entry.delete(0, tk.END)
+        self.proxy_user_entry.insert(0, s.proxy_user)
+        self.proxy_pass_entry.delete(0, tk.END)
+        self.proxy_pass_entry.insert(0, s.proxy_pass)
+
+        self.tg_proxy_scheme_var.set(s.tg_proxy_scheme)
+        self.tg_proxy_host_entry.delete(0, tk.END)
+        self.tg_proxy_host_entry.insert(0, s.tg_proxy_host)
+        self.tg_proxy_port_entry.delete(0, tk.END)
+        self.tg_proxy_port_entry.insert(0, s.tg_proxy_port)
+        self.tg_proxy_user_entry.delete(0, tk.END)
+        self.tg_proxy_user_entry.insert(0, s.tg_proxy_user)
+        self.tg_proxy_pass_entry.delete(0, tk.END)
+        self.tg_proxy_pass_entry.insert(0, s.tg_proxy_pass)
+
+        self.tg_notify_status_var.set(s.tg_notify_status)
+
+        self.schedule_enabled_var.set(s.schedule_enabled)
+        self.schedule_start_entry.delete(0, tk.END)
+        self.schedule_start_entry.insert(0, s.schedule_start)
+        self.schedule_end_entry.delete(0, tk.END)
+        self.schedule_end_entry.insert(0, s.schedule_end)
+        for i, v in enumerate(s.schedule_days):
+            self.schedule_day_vars[i].set(bool(v))
+
+        self.max_items = s.max_items
+        self.show_browser_var.set(s.show_browser)
+        self.log("✅ Настройки загружены")
 
     def save_settings(self):
-        settings = {
-            "telegram_token": self.telegram_token_entry.get().strip(),
-            "telegram_chat_id": self.telegram_chat_id_entry.get().strip(),
-            "proxy_scheme": self.proxy_scheme_var.get(),
-            "proxy_host": self.proxy_host_entry.get().strip(),
-            "proxy_port": self.proxy_port_entry.get().strip(),
-            "proxy_user": self.proxy_user_entry.get().strip(),
-            "proxy_pass": self.proxy_pass_entry.get().strip(),
-            "tg_proxy_scheme": self.tg_proxy_scheme_var.get(),
-            "tg_proxy_host": self.tg_proxy_host_entry.get().strip(),
-            "tg_proxy_port": self.tg_proxy_port_entry.get().strip(),
-            "tg_proxy_user": self.tg_proxy_user_entry.get().strip(),
-            "tg_proxy_pass": self.tg_proxy_pass_entry.get().strip(),
-            "tg_notify_status": bool(self.tg_notify_status_var.get()),
-            "schedule_enabled": bool(self.schedule_enabled_var.get()),
-            "schedule_start": self.schedule_start_entry.get().strip() or "09:00",
-            "schedule_end": self.schedule_end_entry.get().strip() or "21:00",
-            "schedule_days": [bool(v.get()) for v in self.schedule_day_vars],
-            "max_items": self.max_items,
-            "show_browser": bool(self.show_browser_var.get()),
-        }
-        try:
-            with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
-                json.dump(settings, f, ensure_ascii=False, indent=2)
+        s = AppSettings(
+            telegram_token=self.telegram_token_entry.get().strip(),
+            telegram_chat_id=self.telegram_chat_id_entry.get().strip(),
+            proxy_scheme=self.proxy_scheme_var.get(),
+            proxy_host=self.proxy_host_entry.get().strip(),
+            proxy_port=self.proxy_port_entry.get().strip(),
+            proxy_user=self.proxy_user_entry.get().strip(),
+            proxy_pass=self.proxy_pass_entry.get().strip(),
+            tg_proxy_scheme=self.tg_proxy_scheme_var.get(),
+            tg_proxy_host=self.tg_proxy_host_entry.get().strip(),
+            tg_proxy_port=self.tg_proxy_port_entry.get().strip(),
+            tg_proxy_user=self.tg_proxy_user_entry.get().strip(),
+            tg_proxy_pass=self.tg_proxy_pass_entry.get().strip(),
+            tg_notify_status=bool(self.tg_notify_status_var.get()),
+            schedule_enabled=bool(self.schedule_enabled_var.get()),
+            schedule_start=self.schedule_start_entry.get().strip() or "09:00",
+            schedule_end=self.schedule_end_entry.get().strip() or "21:00",
+            schedule_days=[bool(v.get()) for v in self.schedule_day_vars],
+            max_items=self.max_items,
+            show_browser=bool(self.show_browser_var.get()),
+        )
+        if save_app_settings(s, SETTINGS_FILE):
             self.log("✅ Настройки сохранены")
-        except Exception as e:
-            self.log(f"❌ Ошибка сохранения настроек: {e}")
+        else:
+            self.log("❌ Ошибка сохранения настроек")
 
     # ---------- Canvas ----------
     def on_frame_configure(self, event):
@@ -808,21 +802,17 @@ yR1ByZ:paNHYV8EM7su - до двоеточия логин, после - паро�
         return {"http": url, "https": url}
 
     def send_tg_status(self, text):
-        """Шлёт короткое статусное сообщение в TG, если включено в настройках."""
-        if not self.tg_notify_status_var.get():
-            return False
+        """Кладёт статусное сообщение в очередь. Возвращает True если приняли в очередь."""
         if not self.update_telegram_notifier():
             return False
-        return self.telegram_notifier.send_message(text)
+        return self.notifier.enqueue_status(
+            text, status_enabled=bool(self.tg_notify_status_var.get())
+        )
 
     def send_error_telegram(self, error_text):
         if not self.update_telegram_notifier():
             return False
-        error_text = sanitize_error_for_telegram(error_text)
-        if len(error_text) > 3500:
-            error_text = error_text[:3500] + "..."
-        message = f"<b>❌ Ошибка в программе</b>\n<pre>{error_text}</pre>"
-        return self.telegram_notifier.send_message(message)
+        return self.notifier.enqueue_error(error_text)
 
     # ---------- Тесты ----------
     def test_telegram(self):
@@ -834,25 +824,62 @@ yR1ByZ:paNHYV8EM7su - до двоеточия логин, после - паро�
         proxies = self._get_tg_proxies_dict()
         notifier = TelegramNotifier(token, chat_id, proxies=proxies)
         ok, msg = notifier.test_connection()
-        if ok:
-            self.telegram_status_label.configure(text="✅ Бот доступен", text_color="green")
-            if chat_id:
-                test_text = "🔔 Тестовое сообщение от парсера Avito"
-                if notifier.send_message(test_text):
-                    self.telegram_status_label.configure(text="✅ Тест отправлен", text_color="green")
-                else:
-                    self.telegram_status_label.configure(text="❌ Ошибка отправки", text_color="red")
-            else:
-                self.telegram_status_label.configure(text="✅ Бот доступен, укажите Chat ID", text_color="orange")
-        else:
+        if not ok:
             self.telegram_status_label.configure(text=f"❌ {msg}", text_color="red")
+            return
+
+        # Диагностика: проверяем прямой путь и путь через прокси.
+        # Даёт пользователю понять, что именно рвётся при включённом VPN.
+        self.update_telegram_notifier()
+        diag = self.notifier.ping_direct_vs_proxy()
+        direct = diag.get("direct")
+        proxy = diag.get("proxy")
+        parts = []
+        if direct is not None:
+            parts.append("прямо: " + ("✓" if direct.get("ok") else f"✗ {direct.get('err') or direct.get('code')}"))
+        if proxy is not None:
+            parts.append("прокси: " + ("✓" if proxy.get("ok") else f"✗ {proxy.get('err') or proxy.get('code')}"))
+        diag_msg = " | ".join(parts) if parts else "нет данных"
+        self.log(f"🔎 Диагностика TG: {diag_msg}")
+
+        if chat_id:
+            test_text = "🔔 Тестовое сообщение от парсера Avito"
+            if notifier.send_message(test_text):
+                self.telegram_status_label.configure(text=f"✅ Тест отправлен ({diag_msg})", text_color="green")
+            else:
+                self.telegram_status_label.configure(text=f"❌ Ошибка отправки ({diag_msg})", text_color="red")
+        else:
+            self.telegram_status_label.configure(text=f"✅ Бот доступен ({diag_msg})", text_color="orange")
 
     def update_telegram_notifier(self):
         token = self.telegram_token_entry.get().strip()
         chat_id = self.telegram_chat_id_entry.get().strip()
         proxies = self._get_tg_proxies_dict()
-        self.telegram_notifier = TelegramNotifier(token, chat_id, proxies=proxies)
-        return self.telegram_notifier.enabled
+        return self.notifier.configure(token, chat_id, proxies=proxies)
+
+    def _refresh_tg_indicator(self):
+        # Крутим таймер в UI-потоке, дёргаем stats у notifier раз в 2 сек.
+        # Если notifier ещё не поднят или get_stats сломался - молча показываем пусто,
+        # иначе сам UI упадёт.
+        try:
+            stats = self.notifier.get_stats() if self.notifier else None
+        except Exception:
+            stats = None
+        if not stats or not stats.get("enabled"):
+            self.tg_indicator_var.set("")
+        else:
+            pending = stats.get("pending", 0)
+            online = stats.get("online", True)
+            if online and pending == 0:
+                self.tg_indicator_var.set("TG ✓")
+            elif online:
+                self.tg_indicator_var.set(f"TG ✓ · в очереди: {pending}")
+            else:
+                self.tg_indicator_var.set(f"TG ✗ связи нет · в очереди: {pending}")
+        try:
+            self.root.after(2000, self._refresh_tg_indicator)
+        except Exception:
+            pass
 
     def test_proxy(self):
         scheme = self.proxy_scheme_var.get()
@@ -1150,7 +1177,7 @@ yR1ByZ:paNHYV8EM7su - до двоеточия логин, после - паро�
         ]
         return any(m in src for m in markers)
 
-    def _recover_from_captcha(self, proxy_settings):
+    def _recover_from_captcha(self, proxy_settings, show_browser: bool = False):
         """Открываем видимый браузер, ждём пока пользователь решит капчу,
         затем возвращаемся в headless. Куки решения сохраняются через
         общий user-data-dir, поэтому следующий цикл парсит без стены."""
@@ -1203,7 +1230,6 @@ yR1ByZ:paNHYV8EM7su - до двоеточия логин, после - паро�
             except Exception:
                 pass
 
-            show_browser = bool(self.show_browser_var.get())
             if not self.driver_manager.ensure_driver(
                 proxy_settings, self.log,
                 show_browser=show_browser,
@@ -1222,33 +1248,54 @@ yR1ByZ:paNHYV8EM7su - до двоеточия логин, после - паро�
             self._captcha_recovery_in_progress = False
 
     # ---------- Парсинг ----------
-    def run_parser(self, query, min_price, max_price, city):
+    def _build_parse_params(self, query, min_price, max_price, city) -> ParseParams:
+        """Снимает все UI-зависимые значения в UI-потоке. Worker не трогает Tk."""
+        return ParseParams(
+            query=query,
+            min_price=min_price,
+            max_price=max_price,
+            city=city,
+            filter_services=bool(self.filter_services_var.get()),
+            ignore_words=self._get_ignore_words(),
+            delivery=bool(self.delivery_var.get()),
+            show_browser=bool(self.show_browser_var.get()),
+            proxy_settings=self._get_proxy_settings(),
+            schedule_enabled=bool(self.schedule_enabled_var.get()),
+            schedule_start=self.schedule_start_entry.get().strip() or "09:00",
+            schedule_end=self.schedule_end_entry.get().strip() or "21:00",
+            schedule_days=[bool(v.get()) for v in self.schedule_day_vars],
+            notify_sound=bool(self.notify_var.get()),
+            tg_notify_status=bool(self.tg_notify_status_var.get()),
+        )
+
+    def run_parser(self, params: ParseParams):
+        query = params.query
+        min_price = params.min_price
+        max_price = params.max_price
+        city = params.city
+        proxy_settings = params.proxy_settings
+
         # Сбрасываем кэш отбракованных при смене любого фильтр-параметра
-        try:
-            filter_key = (
-                query, min_price, max_price,
-                int(self.filter_services_var.get()),
-                tuple(sorted(self._get_ignore_words())),
-            )
-        except Exception:
-            filter_key = (query, min_price, max_price)
-        if filter_key != self._last_filter_key:
-            if self._filtered_ids:
-                self.log(f"🔄 Фильтры изменились - сброс кэша отбракованных ({len(self._filtered_ids)})")
-            self._filtered_ids = set()
-            self._last_filter_key = filter_key
+        filter_key = (
+            query, min_price, max_price,
+            int(params.filter_services),
+            tuple(sorted(params.ignore_words)),
+        )
+        changed, prev_count = self.history.reset_filter_cache_if_changed(filter_key)
+        if changed and prev_count:
+            self.log(f"🔄 Фильтры изменились - сброс кэша отбракованных ({prev_count})")
 
         # Проверка расписания
-        days_mask = [v.get() for v in self.schedule_day_vars]
         ok, reason = is_within_schedule(
-            self.schedule_enabled_var.get(),
-            self.schedule_start_entry.get().strip() or "09:00",
-            self.schedule_end_entry.get().strip() or "21:00",
-            days_mask,
+            params.schedule_enabled,
+            params.schedule_start,
+            params.schedule_end,
+            params.schedule_days,
         )
         if not ok:
             self.log(f"⏸ {reason} - парсинг пропущен")
-            self.send_tg_status(f"⏸ {reason}")
+            if params.tg_notify_status:
+                self.notifier.enqueue_status(f"⏸ {reason}", status_enabled=True)
             self.progress.stop()
             if not self.auto_update:
                 self._set_idle_ui()
@@ -1256,12 +1303,9 @@ yR1ByZ:paNHYV8EM7su - до двоеточия логин, после - паро�
                 self.root.after(100, self.schedule_next_auto)
             return
 
-        proxy_settings = self._get_proxy_settings()
-
-        show_browser = bool(self.show_browser_var.get())
         if not self.driver_manager.ensure_driver(
             proxy_settings, self.log,
-            show_browser=show_browser,
+            show_browser=params.show_browser,
             user_data_dir=self._chrome_profile_dir,
         ):
             self.log("Не удалось создать драйвер. Парсинг невозможен.")
@@ -1273,7 +1317,7 @@ yR1ByZ:paNHYV8EM7su - до двоеточия логин, после - паро�
 
         try:
             encoded_query = urllib.parse.quote_plus(query)
-            search_key = f"{query}|{city}|{int(self.delivery_var.get())}"
+            search_key = f"{query}|{city}|{int(params.delivery)}"
             cached_url = getattr(self, "cached_search_url", None)
             cached_key = getattr(self, "cached_search_key", None)
             use_cached = cached_url and cached_key == search_key
@@ -1288,8 +1332,8 @@ yR1ByZ:paNHYV8EM7su - до двоеточия логин, после - паро�
                     )
                     self.log("Карточки загружены")
                 except TimeoutException:
-                    if self._is_captcha_page(driver):
-                        self._recover_from_captcha(proxy_settings)
+                    if _parser_is_captcha_page(driver):
+                        self._recover_from_captcha(proxy_settings, show_browser=params.show_browser)
                         return
                     self.log("Кеш URL не сработал, идём долгим путём")
                     self.cached_search_url = None
@@ -1360,8 +1404,8 @@ yR1ByZ:paNHYV8EM7su - до двоеточия логин, после - паро�
                         EC.presence_of_element_located((By.CSS_SELECTOR, "[data-marker='item']"))
                     )
                 except TimeoutException:
-                    if self._is_captcha_page(driver):
-                        self._recover_from_captcha(proxy_settings)
+                    if _parser_is_captcha_page(driver):
+                        self._recover_from_captcha(proxy_settings, show_browser=params.show_browser)
                         return
                     raise
                 self.log("Карточки загружены")
@@ -1370,7 +1414,7 @@ yR1ByZ:paNHYV8EM7su - до двоеточия логин, после - паро�
                     return
 
                 # ===== Фильтр "Авито доставка" =====
-                if self.delivery_var.get():
+                if params.delivery:
                     try:
                         self.log("Применяем фильтр 'Авито Доставка'...")
                         driver.execute_script("window.scrollBy(0, 300);")
@@ -1499,44 +1543,34 @@ yR1ByZ:paNHYV8EM7su - до двоеточия логин, после - паро�
             items = driver.find_elements(By.CSS_SELECTOR, "[data-marker='item']")
             self.log(f"Найдено карточек: {len(items)}")
             self.set_status(f"📋 Обработка карточек: {len(items)}")
-            new_results, page_summary = self.parse_items(items, min_price, max_price)
+            new_results, page_summary = self.parse_items(items, params)
             self.log(f"Новых после фильтров: {len(new_results)}")
 
             # Retry фото у старых объявлений: если у них image_url=="Н/Д" и
             # они сейчас на странице с живым URL - обновляем. Работает даже если
             # на прошлом цикле фото не успело подгрузиться.
             ps_by_id = {p["id"]: p for p in page_summary}
-            retry_updated_items = []
-            for existing in self.all_items:
-                if existing.get("image_url") in (None, "", "Н/Д"):
-                    ps = ps_by_id.get(existing["id"])
-                    if ps and ps.get("image_url") not in (None, "", "Н/Д"):
-                        existing["image_url"] = ps["image_url"]
-                        retry_updated_items.append(existing)
+            retry_updated_items = self.history.apply_retry_image_updates(ps_by_id)
             if retry_updated_items:
                 self.log(f"🖼 Догружено фото у {len(retry_updated_items)} старых объявлений")
 
-            current_query = self.query_entry.get().strip()
-            disappeared = self._detect_disappeared(self.all_items, page_summary, current_query)
+            disappeared = _parser_detect_disappeared(self.history.get_all(), page_summary, query)
             if disappeared:
                 database.mark_inactive([it["id"] for it in disappeared])
-                self.send_disappeared_notification(disappeared)
 
-            self.all_items, added = update_all_items(self.all_items, new_results, self.max_items, self.log)
+            added = self.history.update_with_new(new_results)
             if added > 0:
                 self.log(f"Добавлено новых объявлений: {added}")
             else:
                 self.log("Новых объявлений не найдено")
 
-            if added > 0 and self.notify_var.get():
-                self._play_notification_sound()
+            if added > 0 and params.notify_sound:
+                NotificationService.play_sound()
 
-            if added > 0:
-                self.send_telegram_notification(added)
-
+            # СНАЧАЛА фиксируем данные и обновляем UI, ТОЛЬКО ПОТОМ шлём в TG.
+            # Раньше TG вызывался первым и мог подвесить цикл, если VPN рвётся -
+            # save_data не успевал выполниться и новые объявления терялись.
             # Пишем в БД только изменившееся: новые + те, у кого догрузили фото.
-            # Раньше сохраняли self.all_items целиком - это 500+ UPSERT каждый цикл
-            # даже если нового 0 штук.
             dirty = list(new_results)
             if retry_updated_items:
                 dirty_ids = {it["id"] for it in dirty}
@@ -1554,8 +1588,18 @@ yR1ByZ:paNHYV8EM7su - до двоеточия логин, после - паро�
             self.root.after(0, self.display_results)
             self.set_status(
                 f"✅ Готово. Новых: {added}",
-                counter=f"Всего в БД: {len(self.all_items)}",
+                counter=f"Всего в БД: {self.history.count()}",
             )
+
+            # TG - в очередь: sender-поток сам разберётся. Локальные ошибки сюда
+            # прокинуться не должны, но на всякий случай try, чтобы не положить цикл.
+            try:
+                if disappeared:
+                    self.send_disappeared_notification(disappeared)
+                if added > 0:
+                    self.send_telegram_notification(added)
+            except Exception:
+                logger.exception("Не удалось поставить TG-уведомление в очередь")
 
         except Exception as e:
             if self.stop_parsing:
@@ -1567,8 +1611,10 @@ yR1ByZ:paNHYV8EM7su - до двоеточия логин, после - паро�
             user_msg = format_user_error(e, context="parser")
             self.log(user_msg)
             logger.error(f"Ошибка парсинга: {error_trace}")
-            self.send_tg_status(user_msg)
-            self.send_error_telegram(error_trace)
+            # Notifier уже сконфигурирован в start_parsing - кладём в очередь, Tk не трогаем.
+            if params.tg_notify_status:
+                self.notifier.enqueue_status(user_msg, status_enabled=True)
+            self.notifier.enqueue_error(error_trace)
             self.set_status(user_msg[:80])
 
             # --- 1.4 Recovery: задержка при 429/403 от Авито + перезапуск Chrome если сессия мертва ---
@@ -1598,380 +1644,32 @@ yR1ByZ:paNHYV8EM7su - до двоеточия логин, после - паро�
             if self.auto_update:
                 self.root.after(100, self.schedule_next_auto)
 
-    def _play_notification_sound(self):
-        try:
-            if sys.platform == 'win32':
-                import winsound
-                winsound.Beep(440, 200)
-            elif sys.platform == 'darwin':
-                os.system('afplay /System/Library/Sounds/Glass.aiff &')
-            else:
-                os.system('paplay /usr/share/sounds/freedesktop/stereo/message.oga 2>/dev/null &')
-        except Exception:
-            print('\a')
-
     # ---------- Парсинг элементов ----------
-    def extract_date(self, item):
-        date_selectors = [
-            (By.CSS_SELECTOR, "[data-marker='item-date']"),
-            (By.XPATH, ".//span[contains(@class, 'date')]"),
-            (By.XPATH, ".//time"),
-            (By.XPATH, ".//*[contains(text(), 'сегодня') or contains(text(), 'вчера')]")
-        ]
-        for by, selector in date_selectors:
-            try:
-                elem = item.find_element(by, selector)
-                return elem.text.strip()
-            except NoSuchElementException:
-                continue
-        return "Н/Д"
-
-    def get_item_id(self, item):
-        try:
-            item_id = item.get_attribute("data-item-id")
-            if item_id:
-                return item_id
-        except Exception:
-            pass
-        try:
-            link = item.find_element(By.CSS_SELECTOR, "a[itemprop='url']").get_attribute("href")
-            title = item.find_element(By.CSS_SELECTOR, "[itemprop='name']").text
-            return f"{link}_{title}"
-        except Exception:
-            return None
-
     def _get_ignore_words(self):
         raw = self.ignore_entry.get().strip()
         if not raw:
             return []
         return [w.strip().lower() for w in raw.split(",") if w.strip()]
 
-    def _extract_image_urls_batch(self, driver):
-        """Одним JS-запросом извлекает image_url для всех карточек страницы.
-
-        Пробует src, currentSrc, srcset, <picture><source> srcset в порядке надёжности.
-        srcset и picture-источники обычно проставлены Avito сразу, даже когда src ещё
-        placeholder (data:...) - так обходим lazy-loader.
-
-        Returns:
-            dict {item_id: url_str or None}
-        """
-        js = r"""
-        const cards = document.querySelectorAll("[data-marker='item']");
-        const out = {};
-        const pickSrcset = (ss) => {
-            if (!ss) return null;
-            const parts = String(ss).split(',').map(s => s.trim().split(/\s+/)[0]).filter(Boolean);
-            return parts.length ? parts[parts.length - 1] : null;
-        };
-        const isReal = (u) => u && !u.startsWith('data:');
-        for (const c of cards) {
-            const id = c.getAttribute('data-item-id') || c.id;
-            if (!id) continue;
-            let url = null;
-            const img = c.querySelector("img[data-marker='image']") || c.querySelector('img');
-            if (img) {
-                if (isReal(img.currentSrc)) url = img.currentSrc;
-                if (!url) {
-                    const src = img.getAttribute('src') || '';
-                    if (isReal(src)) url = src;
-                }
-                if (!url) {
-                    const picked = pickSrcset(img.srcset || img.getAttribute('srcset'));
-                    if (isReal(picked)) url = picked;
-                }
-                // Fallback на атрибуты lazy-loader (data-src / data-srcset)
-                if (!url) {
-                    const dsrc = img.getAttribute('data-src') || '';
-                    if (isReal(dsrc)) url = dsrc;
-                }
-                if (!url) {
-                    const picked = pickSrcset(img.getAttribute('data-srcset'));
-                    if (isReal(picked)) url = picked;
-                }
-            }
-            if (!url) {
-                const sources = c.querySelectorAll('picture source');
-                for (const s of sources) {
-                    let picked = pickSrcset(s.srcset || s.getAttribute('srcset'));
-                    if (!isReal(picked)) picked = pickSrcset(s.getAttribute('data-srcset'));
-                    if (isReal(picked)) { url = picked; break; }
-                }
-            }
-            out[id] = isReal(url) ? url : null;
-        }
-        return out;
-        """
-        try:
-            return driver.execute_script(js) or {}
-        except Exception as e:
-            logger.warning(f"Batch image extraction failed: {e}")
-            return {}
-
-    def _fetch_detail_pages_batch(self, id_link_pairs):
-        """Параллельно забирает дату и полное описание со страниц объявлений.
-
-        Авито убрал дату с листинга, а описание в ленте обрезано многоточием.
-        Один HTTP-запрос на страницу закрывает обе задачи. Ходим через
-        driver.execute_async_script с fetch() - наследуем cookies/прокси Selenium.
-
-        Args:
-            id_link_pairs: list[(item_id, link)]
-
-        Returns:
-            dict {item_id: {"date": str|None, "description": str|None}}.
-        """
-        if not id_link_pairs:
-            return {}
-        driver = self.driver_manager.driver
-        if not driver:
-            return {}
-        js = r"""
-        const pairs = arguments[0];
-        const done = arguments[arguments.length - 1];
-        (async () => {
-            const strip = (s) => s
-                .replace(/<!--[\s\S]*?-->/g, '')
-                .replace(/<br\s*\/?>/gi, '\n')
-                .replace(/<\/p>/gi, '\n')
-                .replace(/<[^>]+>/g, '')
-                .replace(/&nbsp;/g, ' ')
-                .replace(/&amp;/g, '&')
-                .replace(/&lt;/g, '<')
-                .replace(/&gt;/g, '>')
-                .replace(/&quot;/g, '"')
-                .replace(/·/g, ' ')
-                .replace(/[ \t]+/g, ' ')
-                .replace(/\n{3,}/g, '\n\n')
-                .trim();
-            const fetchOne = async ([id, url]) => {
-                try {
-                    const r = await fetch(url, {credentials: 'include'});
-                    if (!r.ok) return [id, null];
-                    const html = await r.text();
-                    const dm = html.match(/data-marker="item-view\/item-date"[^>]*>([\s\S]*?)<\/span>/);
-                    const desc_m = html.match(/data-marker="item-view\/item-description"[^>]*>([\s\S]*?)<\/div>\s*<\/div>/)
-                        || html.match(/data-marker="item-view\/item-description"[^>]*>([\s\S]*?)<\/div>/);
-                    const date_text = dm ? strip(dm[1]).replace(/\s+/g, ' ') : null;
-                    const desc_text = desc_m ? strip(desc_m[1]) : null;
-                    return [id, {date: date_text, description: desc_text}];
-                } catch (e) {
-                    return [id, null];
-                }
-            };
-            const results = await Promise.all(pairs.map(fetchOne));
-            const out = {};
-            for (const [id, data] of results) if (data) out[id] = data;
-            done(out);
-        })();
-        """
-        try:
-            driver.set_script_timeout(60)
-            result = driver.execute_async_script(js, id_link_pairs)
-            return result or {}
-        except Exception as e:
-            logger.warning(f"Batch fetch детальных страниц не удался: {e}")
-            return {}
-
-    def parse_items(self, items, min_price, max_price):
-        """Двухпроходный парсер.
-
-        Pass 1 - лёгкое сканирование (id + дата + image_url) по ВСЕМ карточкам.
-        Pass 2 - полная экстракция остальных полей только для новых карточек.
-
-        image_url извлекается одним batch-JS на все карточки (дёшево),
-        и складывается в page_summary для retry-логики в run_parser.
-
-        Returns:
-            tuple (full_new_items, page_summary):
-                full_new_items - полные dict-ы новых объявлений (для БД/TG).
-                page_summary   - [{id, pub_date_timestamp, search_query, image_url}, ...]
-                                 по всей странице - для _detect_disappeared и retry фото.
-        """
-        total = len(items)
-        known_ids = {it["id"] for it in self.all_items} | self._filtered_ids
-        current_query = self.query_entry.get().strip()
-
-        driver = self.driver_manager.driver
-        image_urls = self._extract_image_urls_batch(driver) if driver else {}
-        got_imgs = sum(1 for v in image_urls.values() if v)
-        if total:
-            self.log(f"🖼 Batch-извлечение URL картинок: {got_imgs}/{len(image_urls)}")
-
-        page_summary = []
-        cards_to_parse = []
-
-        self.log(f"🔍 Скан карточек на новые (всего: {total})...")
-        for idx, item in enumerate(items, 1):
-            if self.stop_parsing:
-                self.log("⏹️ Парсинг прерван пользователем (скан)")
-                return [], page_summary
-            item_id = self.get_item_id(item)
-            if not item_id:
-                continue
-            date_str = self.extract_date(item)
-            timestamp = parse_date_to_timestamp(date_str)
-            img_from_batch = image_urls.get(item_id)
-            page_summary.append({
-                "id": item_id,
-                "pub_date_timestamp": timestamp,
-                "search_query": current_query,
-                "image_url": img_from_batch or "Н/Д",
-            })
-            if item_id not in known_ids:
-                cards_to_parse.append((item, item_id, date_str, timestamp, img_from_batch))
-            if idx % 10 == 0 or idx == total:
-                self.log(f"   скан {idx}/{total}, новых пока: {len(cards_to_parse)}")
-
-        skipped = total - len(cards_to_parse)
-        self.log(f"📊 На странице: {total}, известно: {skipped}, на разбор: {len(cards_to_parse)}")
-
-        result = []
-        ignore_words = self._get_ignore_words()
-        new_total = len(cards_to_parse)
-        for idx, (item, item_id, date_str, timestamp, img_from_batch) in enumerate(cards_to_parse):
-            if self.stop_parsing:
-                self.log("⏹️ Парсинг прерван пользователем")
-                return result, page_summary
-
-            self.log(f"🔄 Обработка новой карточки {idx + 1}/{new_total}...")
-
-            try:
-                try:
-                    title = item.find_element(By.CSS_SELECTOR, "[itemprop='name']").text
-                except NoSuchElementException:
-                    title = "Н/Д"
-
-                try:
-                    link = item.find_element(By.CSS_SELECTOR, "a[itemprop='url']").get_attribute("href")
-                except NoSuchElementException:
-                    link = "Н/Д"
-
-                self.log(f"📦 {title}")
-                if link and link != "Н/Д":
-                    self.log(f"🔗 {link}")
-
-                price_elem = item.find_element(By.CSS_SELECTOR, "[itemprop='price']")
-                price = price_elem.get_attribute("content")
-                if not price:
-                    self.log("⛔ Цена не найдена - пропущено")
-                    self._filtered_ids.add(item_id)
-                    continue
-                price_int = int(price)
-                self.log(f"📄 Цена: {price_int} руб.")
-
-                if price_int < min_price or price_int > max_price:
-                    self.log(f"⛔ Цена {price_int} вне диапазона ({min_price}-{max_price}) - пропущено")
-                    self._filtered_ids.add(item_id)
-                    continue
-
-                if self.filter_services_var.get():
-                    if link and link != "Н/Д":
-                        if "predlozheniya_uslug" in link or "vakansii" in link:
-                            self.log(f"🔍 ОТФИЛЬТРОВАНО (услуги): {title[:30]}...")
-                            self._filtered_ids.add(item_id)
-                            continue
-
-                # URL картинки уже извлечён batch-JS в начале parse_items - берём из
-                # него. Если там None (картинка не успела прогрузиться), допишем "Н/Д"
-                # и надеемся на retry на следующем цикле.
-                img_url = img_from_batch or "Н/Д"
-
-                description = "Н/Д"
-                for desc_selector in [
-                    (By.CSS_SELECTOR, "[itemprop='description']"),
-                    (By.CSS_SELECTOR, "[data-marker*='description']"),
-                    (By.XPATH, ".//div[contains(@class, 'description')]"),
-                ]:
-                    try:
-                        desc = item.find_element(*desc_selector)
-                        text = desc.text.strip()
-                        if text and len(text) > 5:
-                            description = text
-                            break
-                    except NoSuchElementException:
-                        continue
-
-                if description == "Н/Д" or len(description) < 20:
-                    try:
-                        paragraphs = item.find_elements(By.TAG_NAME, "p")
-                        full_text = []
-                        for p in paragraphs:
-                            text = p.text.strip()
-                            if len(text) > 20 and "₽" not in text and "район" not in text.lower() and "метро" not in text.lower():
-                                full_text.append(text)
-                        if full_text:
-                            description = "\n".join(full_text)
-                    except Exception:
-                        pass
-
-                if ignore_words:
-                    haystack = f"{title} {description}".lower()
-                    hit = next((w for w in ignore_words if w in haystack), None)
-                    if hit:
-                        self.log(f"🚫 Игнор-слово «{hit}»: {title[:40]}...")
-                        self._filtered_ids.add(item_id)
-                        continue
-
-                result.append({
-                    "id": item_id,
-                    "title": title,
-                    "price": price_int,
-                    "link": link,
-                    "image_url": img_url,
-                    "description": description,
-                    "date": date_str,
-                    "pub_date_timestamp": timestamp,
-                    "search_query": current_query,
-                    "is_new": False,
-                    "first_seen": None
-                })
-                self.log(f"✅ Добавлено: {title[:30]}...")
-
-            except Exception as e:
-                self.log(f"❌ Исключение при обработке карточки: {e}")
-                logger.error(f"Ошибка при парсинге элемента: {e}")
-                continue
-
-        # Точное время публикации + полное описание - ходим на страницу каждого
-        # нового объявления через fetch() внутри браузера (batch+parallel, с куками/прокси).
-        id_link_pairs = [[r["id"], r["link"]] for r in result if r.get("link") and r["link"] != "Н/Д"]
-        if id_link_pairs:
-            self.log(f"🕐 Получаю детали (дата + полное описание) для {len(id_link_pairs)} объявлений...")
-            details = self._fetch_detail_pages_batch(id_link_pairs)
-            got_date = 0
-            got_desc = 0
-            summary_by_id = {s["id"]: s for s in page_summary}
-            for r in result:
-                d = details.get(r["id"])
-                if not d:
-                    continue
-                date_text = d.get("date")
-                desc_text = d.get("description")
-                if date_text:
-                    ts = parse_date_to_timestamp(date_text)
-                    if ts > 0:
-                        r["date"] = date_text
-                        r["pub_date_timestamp"] = ts
-                        s = summary_by_id.get(r["id"])
-                        if s:
-                            s["pub_date_timestamp"] = ts
-                        got_date += 1
-                if desc_text and len(desc_text) > 10:
-                    r["description"] = desc_text
-                    got_desc += 1
-            self.log(f"   ✓ дата: {got_date}/{len(id_link_pairs)}, описание: {got_desc}/{len(id_link_pairs)}")
-
-        return result, page_summary
+    def parse_items(self, items, params: ParseParams):
+        """Тонкий шим над AvitoParser - передаёт снимок UI + состояние БД."""
+        return self.avito_parser.parse_items(
+            driver=self.driver_manager.driver,
+            items=items,
+            min_price=params.min_price,
+            max_price=params.max_price,
+            search_query=params.query,
+            filter_services=params.filter_services,
+            ignore_words=params.ignore_words,
+            known_ids=self.history.known_ids(),
+            filtered_ids=self.history.get_filtered_ids(),
+            stop_check=lambda: self.stop_parsing,
+        )
 
     # ---------- Данные ----------
     def _load_data(self):
         # Старт всегда с пустой истории - предложим загрузить из файла после прорисовки UI.
-        try:
-            clear_history_files()
-        except Exception as e:
-            logger.error(f"Не удалось очистить БД на старте: {e}")
-        self.all_items = []
+        self.history.clear()
         self.root.after(300, self._startup_history_prompt)
 
     def _startup_history_prompt(self):
@@ -1992,25 +1690,18 @@ yR1ByZ:paNHYV8EM7su - до двоеточия логин, после - паро�
             self.log("Загрузка отменена, история пуста")
             return
         try:
-            with open(path, 'r', encoding='utf-8') as f:
-                items = json.load(f)
-            if not isinstance(items, list):
-                raise ValueError("В файле ожидался JSON-список объявлений")
-            for it in items:
-                it["is_new"] = False
-            self.all_items = items
-            save_data(self.all_items, self.log)
-            self.log(f"История загружена из {path} ({len(items)} объявлений)")
+            count = self.history.import_from_file(path)
+            self.log(f"История загружена из {path} ({count} объявлений)")
             self.display_results()
         except Exception as e:
             messagebox.showerror("Ошибка загрузки", f"Не удалось загрузить файл:\n{e}")
             self.log(f"Ошибка загрузки истории: {e}")
 
     def _save_data(self):
-        save_data(self.all_items, self.log)
+        self.history.persist_all()
 
     def _export_history_to_file(self):
-        """Диалог выбора файла + дамп self.all_items в JSON. True если сохранили."""
+        """Диалог выбора файла + дамп истории в JSON. True если сохранили."""
         default_name = f"avito_history_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
         path = filedialog.asksaveasfilename(
             title="Сохранить историю",
@@ -2021,9 +1712,7 @@ yR1ByZ:paNHYV8EM7su - до двоеточия логин, после - паро�
         if not path:
             return False
         try:
-            with open(path, 'w', encoding='utf-8') as f:
-                json.dump(self.all_items, f, ensure_ascii=False, indent=2, default=str)
-            logger.info(f"История сохранена: {path} ({len(self.all_items)} объявлений)")
+            self.history.export_to_file(path)
             return True
         except Exception as e:
             messagebox.showerror("Ошибка сохранения", f"Не удалось сохранить файл:\n{e}")
@@ -2032,59 +1721,21 @@ yR1ByZ:paNHYV8EM7su - до двоеточия логин, после - паро�
 
     def clear_history(self):
         if messagebox.askyesno("Очистка истории", "Вы уверены, что хотите удалить всю историю объявлений?"):
-            self.all_items = []
+            self.history.clear()
             self.images = []
-            clear_history_files()
             self.display_results()
             self.log("История очищена")
 
     # ---------- Telegram уведомления ----------
-    def _normalize_title(self, title):
-        import re
-        t = (title or "").lower()
-        t = re.sub(r"[^\w\s]", " ", t, flags=re.UNICODE)
-        words = [w for w in t.split() if len(w) >= 3]
-        return set(words)
-
-    def _is_duplicate(self, new_item, existing_items):
-        new_price = new_item.get("price") or 0
-        new_title_words = self._normalize_title(new_item.get("title", ""))
-        if not new_title_words or new_price <= 0:
-            return False
-        for old in existing_items:
-            if old.get("id") == new_item.get("id"):
-                continue
-            old_price = old.get("price") or 0
-            if old_price <= 0:
-                continue
-            price_delta = abs(new_price - old_price) / max(old_price, 1)
-            if price_delta > 0.1:
-                continue
-            old_words = self._normalize_title(old.get("title", ""))
-            if not old_words:
-                continue
-            overlap = len(new_title_words & old_words)
-            union = len(new_title_words | old_words)
-            if union > 0 and overlap / union >= 0.7:
-                return True
-        return False
-
     def send_telegram_notification(self, added):
         if not self.update_telegram_notifier():
             return
         if added <= 0:
             return
 
-        new_items = [item for item in self.all_items if item.get("is_new", False)]
+        new_items = self.history.iter_new()
         if not new_items:
             return
-
-        # Сортируем по возрастанию: сначала шлём старые, самое свежее - последним сообщением
-        new_items.sort(key=lambda x: x.get("pub_date_timestamp", 0) or 0)
-
-        self.telegram_notifier.send_message(
-            f"<b>🔔 Найдено новых объявлений: {len(new_items)}</b>"
-        )
 
         # Сессия для скачивания картинок с Avito (не через TG-прокси, с нашими куками)
         img_session = requests.Session()
@@ -2099,126 +1750,25 @@ yR1ByZ:paNHYV8EM7su - до двоеточия логин, после - паро�
             'Referer': 'https://www.avito.ru/',
         })
 
-        def _esc(s):
-            return (str(s).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"))
-
-        for item in new_items:
-            # Шапка - всегда влазит в 1024 символа TG caption
-            header = f"<a href='{_esc(item['link'])}'>{_esc(item['title'])}</a>\n"
-            header += f"💰 {_esc(item['price'])} руб.\n"
-            pub_ts = item.get("pub_date_timestamp", 0) or 0
-            if pub_ts > 0:
-                pub_str = datetime.fromtimestamp(pub_ts).strftime("%d.%m.%Y %H:%M")
-            else:
-                pub_str = item.get("date", "Н/Д")
-            header += f"🕐 На Авито: {_esc(pub_str)}\n"
-            header += f"📥 В программе: {_esc(item.get('first_seen', 'Н/Д'))}"
-
-            # Описание - отдельное сообщение (лимит 4096, запас для <blockquote> большой)
-            desc = item.get('description', '')
-            desc_msg = None
-            if desc and desc != "Н/Д":
-                # Режем очень длинные описания - TG лимит 4096 на текст, оставим запас
-                if len(desc) > 3500:
-                    desc = desc[:3500] + "..."
-                desc_msg = f"<blockquote>{_esc(desc)}</blockquote>"
-
-            img = item.get('image_url')
-            photo_bytes = None
-            if img and img != "Н/Д" and img.startswith("http"):
-                photo_bytes = self._fetch_image_bytes(img_session, img)
-
-            if photo_bytes:
-                self.telegram_notifier.send_photo(caption=header, photo_bytes=photo_bytes)
-            else:
-                # Avito блокирует и нас и TG - шлём просто текст со ссылкой
-                self.telegram_notifier.send_message(header)
-
-            if desc_msg:
-                self.telegram_notifier.send_message(desc_msg)
-
-    def _detect_disappeared(self, all_items, new_results, current_query):
-        """Находит объявления, которые были активны в выдаче и пропали в текущем парсе."""
-        if not new_results or not all_items:
-            return []
-        new_ids = {item["id"] for item in new_results}
-        min_ts = min((r.get("pub_date_timestamp", 0) or 0) for r in new_results)
-        if min_ts <= 0:
-            return []
-        disappeared = []
-        for old in all_items:
-            if old.get("id") in new_ids:
-                continue
-            if not old.get("is_active", True):
-                continue
-            if current_query and old.get("search_query") and old["search_query"] != current_query:
-                continue
-            old_ts = old.get("pub_date_timestamp", 0) or 0
-            if old_ts < min_ts:
-                continue
-            disappeared.append(old)
-        return disappeared
+        # Предзагружаем картинки и складываем в очередь - фактическую отправку
+        # в TG делает sender-поток. Если TG сейчас лежит, уведомления
+        # уедут, как только связь вернётся.
+        self.notifier.enqueue_new_items(new_items, img_session)
 
     def send_disappeared_notification(self, disappeared):
         if not disappeared:
             return
         if not self.update_telegram_notifier():
             return
-        self.log(f"🗑️ Пропало объявлений: {len(disappeared)}")
-        MAX_LEN = 4000
-        header = f"<b>🗑️ Объявления сняты: {len(disappeared)}</b>\n\n"
-        current_msg = header
-        messages = []
-        for item in disappeared:
-            price = item.get("price")
-            price_str = f"{price} руб." if price else "цена не указана"
-            block = f"• <s>{item.get('title', 'Н/Д')}</s> - было {price_str}\n\n"
-            if len(current_msg) + len(block) > MAX_LEN:
-                messages.append(current_msg)
-                current_msg = "🔹 Продолжение:\n\n" + block
-            else:
-                current_msg += block
-        if current_msg:
-            messages.append(current_msg)
-        for msg in messages:
-            self.telegram_notifier.send_message(msg)
+        self.notifier.enqueue_disappeared(disappeared)
 
     # ---------- Загрузка изображений ----------
-    def _fetch_image_bytes(self, session, image_url, max_attempts=3):
-        """Возвращает raw bytes картинки. Использует кэш; скачивает с retry при miss."""
-        with self._img_cache_lock:
-            cached = self._img_bytes_cache.get(image_url)
-        if cached is not None:
-            return cached
-
-        last_err = None
-        for attempt in range(max_attempts):
-            try:
-                resp = session.get(image_url, timeout=20)
-                if resp.status_code == 200 and resp.content:
-                    data = resp.content
-                    with self._img_cache_lock:
-                        if image_url not in self._img_bytes_cache:
-                            self._img_bytes_cache[image_url] = data
-                            self._img_cache_order.append(image_url)
-                            while len(self._img_cache_order) > self._img_cache_max:
-                                old = self._img_cache_order.pop(0)
-                                self._img_bytes_cache.pop(old, None)
-                    return data
-                last_err = f"HTTP {resp.status_code}"
-            except Exception as e:
-                last_err = str(e)
-                time.sleep(0.5 * (attempt + 1))
-
-        logger.warning(f"Не скачалась картинка {image_url[:80]}: {last_err}")
-        return None
-
     def _load_image_async(self, session, image_url, img_label, card, gen):
         """Берёт байты картинки (из кэша или качает), превращает в PIL и ставит в карточку."""
         if gen != self._results_gen:
             return
 
-        data = self._fetch_image_bytes(session, image_url)
+        data = self.notifier.fetch_image_bytes(session, image_url)
         if gen != self._results_gen:
             return
 
@@ -2352,7 +1902,7 @@ yR1ByZ:paNHYV8EM7su - до двоеточия логин, после - паро�
 
     def display_results(self):
         try:
-            visible_items = list(self.all_items)
+            visible_items = self.history.get_all()
             visible_ids = [it["id"] for it in visible_items]
 
             # Fast path: тот же список в том же порядке - ничего не пересобираем,
@@ -2420,7 +1970,7 @@ yR1ByZ:paNHYV8EM7su - до двоеточия логин, после - паро�
     def _jump_to_next_new(self):
         order = getattr(self, "_rendered_order", None) or []
         cards = getattr(self, "_rendered_cards", None) or {}
-        items_by_id = {it["id"]: it for it in self.all_items}
+        items_by_id = self.history.items_by_id()
         new_ids = [id_ for id_ in order if items_by_id.get(id_, {}).get("is_new")]
         if not new_ids:
             self._hide_new_banner()
@@ -2517,6 +2067,10 @@ yR1ByZ:paNHYV8EM7su - до двоеточия логин, после - паро�
                 self.log("Интервал должен быть числом")
                 return
 
+        params = self._build_parse_params(query, min_price, max_price, city)
+        # TG-notifier конфигурируем сразу в UI-потоке - worker только шлёт.
+        self.update_telegram_notifier()
+
         self.stop_parsing = False
         self.auto_update = auto_mode
         self._set_busy_ui()
@@ -2524,7 +2078,7 @@ yR1ByZ:paNHYV8EM7su - до двоеточия логин, после - паро�
         self.log("🔄 Автопарсинг запущен" if auto_mode else "Разовый парсинг...")
         self.set_status(f"🔍 Ищем: {query}")
         self._parser_thread = threading.Thread(
-            target=self.run_parser, args=(query, min_price, max_price, city), daemon=True
+            target=self.run_parser, args=(params,), daemon=True
         )
         self._parser_thread.start()
 
@@ -2574,8 +2128,10 @@ yR1ByZ:paNHYV8EM7su - до двоеточия логин, после - паро�
                     self.stop_auto_update()
                     return
                 self.log("Автообновление...")
+                params = self._build_parse_params(query, min_price, max_price, city)
+                self.update_telegram_notifier()
                 self._parser_thread = threading.Thread(
-                    target=self.run_parser, args=(query, min_price, max_price, city), daemon=True
+                    target=self.run_parser, args=(params,), daemon=True
                 )
                 self._parser_thread.start()
             except ValueError:
@@ -2610,6 +2166,11 @@ yR1ByZ:paNHYV8EM7su - до двоеточия логин, после - паро�
             self._export_history_to_file()
         self.image_executor.shutdown(wait=False)
         self.driver_manager.cleanup()
+        # Гасим фоновые потоки TG-notifier-а до destroy, чтобы не тянули UI-цикл.
+        try:
+            self.notifier.stop_background(timeout=3)
+        except Exception as e:
+            logger.warning(f"Не удалось остановить TG-notifier: {e}")
         try:
             clear_history_files()
         except Exception as e:
