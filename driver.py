@@ -83,6 +83,38 @@ chrome.webRequest.onAuthRequired.addListener(
 
         return ext_dir
 
+    def _cleanup_stale_profile_locks(self, user_data_dir, log_callback=None):
+        """Убирает зависшие lock-файлы Chrome-профиля от прошлого аварийного выхода.
+
+        Если предыдущий процесс упал без clean shutdown, в профиле остаются
+        SingletonLock / SingletonSocket / SingletonCookie / lockfile - и новый
+        Chrome падает с "DevToolsActivePort file doesn't exist / Chrome failed
+        to start: crashed". Если второй Chrome реально держит профиль сейчас,
+        ОС не даст удалить lock-и - просто поймаем OSError и пойдём дальше:
+        Chrome сам ругнётся "profile in use" и это будет честный сигнал.
+        """
+        lock_names = ("SingletonLock", "SingletonSocket", "SingletonCookie", "lockfile")
+        removed = []
+        for name in lock_names:
+            path = os.path.join(user_data_dir, name)
+            if not os.path.lexists(path):
+                continue
+            try:
+                if os.path.islink(path):
+                    os.unlink(path)
+                elif os.path.isdir(path):
+                    shutil.rmtree(path, ignore_errors=True)
+                else:
+                    os.remove(path)
+                removed.append(name)
+            except OSError as e:
+                logger.debug(f"Lock {name} не удалён (возможно, активен): {e}")
+        if removed:
+            msg = f"🔓 Убраны зависшие lock-файлы Chrome-профиля: {', '.join(removed)}"
+            logger.info(msg)
+            if log_callback:
+                log_callback(msg)
+
     def create_driver(self, proxy_settings, log_callback=None, show_browser=False, user_data_dir=None):
         """Создает новый экземпляр ChromeDriver.
 
@@ -119,6 +151,7 @@ chrome.webRequest.onAuthRequired.addListener(
             if user_data_dir:
                 try:
                     os.makedirs(user_data_dir, exist_ok=True)
+                    self._cleanup_stale_profile_locks(user_data_dir, log_callback)
                     options.add_argument(f'--user-data-dir={user_data_dir}')
                 except Exception as e:
                     logger.warning(f"Не удалось использовать user-data-dir {user_data_dir}: {e}")
