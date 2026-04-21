@@ -4,7 +4,7 @@ import sqlite3
 from datetime import datetime
 from contextlib import contextmanager
 
-from config import DB_FILE, DATA_FILE, QUEUE_DB_FILE
+from config import DB_FILE, DATA_FILE
 from logger_setup import logger
 
 
@@ -44,13 +44,6 @@ CREATE TABLE IF NOT EXISTS price_history (
     FOREIGN KEY (ad_id) REFERENCES ads(id) ON DELETE CASCADE
 );
 
-CREATE INDEX IF NOT EXISTS idx_ads_pub_date ON ads(pub_date_timestamp DESC);
-CREATE INDEX IF NOT EXISTS idx_ads_search_query ON ads(search_query);
-CREATE INDEX IF NOT EXISTS idx_price_history_ad_id ON price_history(ad_id);
-"""
-
-
-QUEUE_SCHEMA = """
 CREATE TABLE IF NOT EXISTS notifications_queue (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     type TEXT NOT NULL,
@@ -62,45 +55,20 @@ CREATE TABLE IF NOT EXISTS notifications_queue (
     last_error TEXT
 );
 
+CREATE INDEX IF NOT EXISTS idx_ads_pub_date ON ads(pub_date_timestamp DESC);
+CREATE INDEX IF NOT EXISTS idx_ads_search_query ON ads(search_query);
+CREATE INDEX IF NOT EXISTS idx_price_history_ad_id ON price_history(ad_id);
 CREATE INDEX IF NOT EXISTS idx_notif_queue_next_retry ON notifications_queue(next_retry_at);
 """
 
 
-# Таймаут ожидания writer-lock. Сколько секунд ждать другой writer перед
-# sqlite3.OperationalError("database is locked"). Дефолт Python - 5с,
-# поставим 30 чтоб точно не нарваться на busy-исключения при пиковых бурстах.
-_BUSY_TIMEOUT_MS = 30000
-
-
-def _configure(conn):
-    conn.row_factory = sqlite3.Row
-    conn.execute(f"PRAGMA busy_timeout = {_BUSY_TIMEOUT_MS}")
-    conn.execute("PRAGMA journal_mode = WAL")
-    conn.execute("PRAGMA synchronous = NORMAL")
-
-
 @contextmanager
 def get_conn():
-    conn = sqlite3.connect(DB_FILE, timeout=_BUSY_TIMEOUT_MS / 1000)
-    _configure(conn)
+    conn = sqlite3.connect(DB_FILE)
+    conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
-    try:
-        yield conn
-        conn.commit()
-    except Exception:
-        conn.rollback()
-        raise
-    finally:
-        conn.close()
-
-
-@contextmanager
-def get_queue_conn():
-    """Отдельная база под очередь уведомлений - чтоб writer-lock парсера
-    (save_ads на сотню строк) не блокировал sender, делающий queue_delete
-    после каждой отправки."""
-    conn = sqlite3.connect(QUEUE_DB_FILE, timeout=_BUSY_TIMEOUT_MS / 1000)
-    _configure(conn)
+    conn.execute("PRAGMA journal_mode = WAL")
+    conn.execute("PRAGMA synchronous = NORMAL")
     try:
         yield conn
         conn.commit()
@@ -121,60 +89,6 @@ def init_db():
             conn.execute("ALTER TABLE ads ADD COLUMN is_favorite INTEGER DEFAULT 0")
         if "seller_rating" not in cols:
             conn.execute("ALTER TABLE ads ADD COLUMN seller_rating REAL")
-    init_queue_db()
-
-
-def init_queue_db():
-    """Создаёт схему очереди + переносит старые висяки из основной БД, если есть."""
-    with get_queue_conn() as qconn:
-        qconn.executescript(QUEUE_SCHEMA)
-
-    _migrate_queue_from_main_db()
-
-
-def _migrate_queue_from_main_db():
-    """Одноразовый перенос notifications_queue из основной БД в отдельную.
-    Безопасно выполняется многократно: старую таблицу удаляем только после
-    успешного переноса, если в ней вообще что-то было."""
-    try:
-        with get_conn() as conn:
-            cur = conn.execute(
-                "SELECT name FROM sqlite_master WHERE type='table' AND name='notifications_queue'"
-            )
-            if cur.fetchone() is None:
-                return
-            cur = conn.execute(
-                "SELECT type, payload_json, attempts, next_retry_at, created_at, "
-                "max_attempts, last_error FROM notifications_queue"
-            )
-            rows = cur.fetchall()
-    except Exception as e:
-        logger.warning(f"Миграция очереди: не смогла прочитать старую таблицу: {e}")
-        return
-
-    if rows:
-        try:
-            with get_queue_conn() as qconn:
-                qconn.executemany(
-                    "INSERT INTO notifications_queue "
-                    "(type, payload_json, attempts, next_retry_at, created_at, "
-                    "max_attempts, last_error) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                    [
-                        (r["type"], r["payload_json"], r["attempts"], r["next_retry_at"],
-                         r["created_at"], r["max_attempts"], r["last_error"])
-                        for r in rows
-                    ],
-                )
-            logger.info(f"Миграция очереди: перенесено {len(rows)} рядов в {QUEUE_DB_FILE}")
-        except Exception as e:
-            logger.error(f"Миграция очереди: не удалось записать в {QUEUE_DB_FILE}: {e}")
-            return
-
-    try:
-        with get_conn() as conn:
-            conn.execute("DROP TABLE IF EXISTS notifications_queue")
-    except Exception as e:
-        logger.warning(f"Миграция очереди: не удалось удалить старую таблицу: {e}")
 
 
 def _row_to_item(row):
@@ -467,7 +381,7 @@ def queue_enqueue(type_, payload_json, max_attempts=3):
     """Кладёт строку в очередь, готовую к немедленной отправке."""
     import time as _t
     now = _t.time()
-    with get_queue_conn() as conn:
+    with get_conn() as conn:
         cur = conn.execute(
             "INSERT INTO notifications_queue "
             "(type, payload_json, attempts, next_retry_at, created_at, max_attempts) "
@@ -479,7 +393,7 @@ def queue_enqueue(type_, payload_json, max_attempts=3):
 
 def queue_fetch_ready(now_ts, limit=1):
     """Возвращает готовые к отправке строки (next_retry_at <= now), по возрасту."""
-    with get_queue_conn() as conn:
+    with get_conn() as conn:
         cur = conn.execute(
             "SELECT id, type, payload_json, attempts, max_attempts, created_at "
             "FROM notifications_queue "
@@ -492,7 +406,7 @@ def queue_fetch_ready(now_ts, limit=1):
 
 def queue_next_scheduled_at():
     """Время ближайшего next_retry_at (или None если очередь пуста)."""
-    with get_queue_conn() as conn:
+    with get_conn() as conn:
         cur = conn.execute(
             "SELECT MIN(next_retry_at) AS t FROM notifications_queue"
         )
@@ -502,7 +416,7 @@ def queue_next_scheduled_at():
 
 def queue_mark_failed(row_id, err, next_retry_at):
     """Инкрементирует attempts и откладывает попытку."""
-    with get_queue_conn() as conn:
+    with get_conn() as conn:
         conn.execute(
             "UPDATE notifications_queue "
             "SET attempts = attempts + 1, next_retry_at = ?, last_error = ? "
@@ -512,12 +426,12 @@ def queue_mark_failed(row_id, err, next_retry_at):
 
 
 def queue_delete(row_id):
-    with get_queue_conn() as conn:
+    with get_conn() as conn:
         conn.execute("DELETE FROM notifications_queue WHERE id = ?", (row_id,))
 
 
 def queue_count_pending():
-    with get_queue_conn() as conn:
+    with get_conn() as conn:
         cur = conn.execute("SELECT COUNT(*) AS c FROM notifications_queue")
         row = cur.fetchone()
         return row["c"] if row else 0
@@ -527,7 +441,7 @@ def queue_purge_old(max_age_days=7):
     """Чистит висяки старше N дней (последняя защита от роста БД)."""
     import time as _t
     cutoff = _t.time() - max_age_days * 86400
-    with get_queue_conn() as conn:
+    with get_conn() as conn:
         cur = conn.execute(
             "DELETE FROM notifications_queue WHERE created_at < ?",
             (cutoff,),
