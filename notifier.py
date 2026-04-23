@@ -105,15 +105,13 @@ class NotificationService:
 
             title = item.get('title', '') or ''
             link = item.get('link', '') or ''
-            if title and link and link != 'Н/Д' and link.startswith('http'):
-                header = f"📌 <a href='{_esc(link)}'>{_esc(title)}</a>\n"
-            elif title:
+            if title:
                 header = f"📌 <b>{_esc(title)}</b>\n"
             else:
                 header = ""
             header += f"💰 {_esc(item['price'])} руб.\n"
             if link and link != 'Н/Д' and link.startswith('http'):
-                header += f"🔗 {_esc(link)}\n"
+                header += f"🔗 <a href='{_esc(link)}'>Ссылка</a>\n"
             pub_ts = item.get("pub_date_timestamp", 0) or 0
             if pub_ts > 0:
                 pub_str = datetime.fromtimestamp(pub_ts).strftime("%d.%m.%Y %H:%M")
@@ -125,12 +123,14 @@ class NotificationService:
             desc = item.get('description', '') or ''
             caption = header
             if desc and desc != "Н/Д":
-                budget = CAPTION_LIMIT - len(header) - len("\n\n")
+                quote_prefix = "\n\n<blockquote>"
+                quote_suffix = "</blockquote>"
+                budget = CAPTION_LIMIT - len(header) - len(quote_prefix) - len(quote_suffix)
                 if budget > 40:
                     desc_text = desc
                     if len(desc_text) > budget:
                         desc_text = desc_text[: budget - 3] + "..."
-                    caption = header + "\n\n" + _esc(desc_text)
+                    caption = header + quote_prefix + _esc(desc_text) + quote_suffix
 
             img = item.get('image_url')
             photo_bytes = None
