@@ -1472,7 +1472,11 @@ yR1ByZ:paNHYV8EM7su - до двоеточия логин, после - паро�
                         if not solved:
                             return
                         driver = self.driver_manager.driver
-                        WebDriverWait(driver, 10).until(
+                        search_url = self.cached_search_url or url
+                        self.log(f"🔄 Перезагружаю поиск после капчи: {search_url}")
+                        driver.get(search_url)
+                        random_sleep(3.0, 5.0)
+                        WebDriverWait(driver, 15).until(
                             EC.presence_of_element_located((By.CSS_SELECTOR, "[data-marker='item']"))
                         )
                     else:

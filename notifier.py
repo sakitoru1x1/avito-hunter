@@ -103,8 +103,17 @@ class NotificationService:
         for item in new_items:
             _smart_sleep()
 
-            header = f"<a href='{_esc(item['link'])}'>{_esc(item['title'])}</a>\n"
+            title = item.get('title', '') or ''
+            link = item.get('link', '') or ''
+            if title and link and link != 'Н/Д' and link.startswith('http'):
+                header = f"📌 <a href='{_esc(link)}'>{_esc(title)}</a>\n"
+            elif title:
+                header = f"📌 <b>{_esc(title)}</b>\n"
+            else:
+                header = ""
             header += f"💰 {_esc(item['price'])} руб.\n"
+            if link and link != 'Н/Д' and link.startswith('http'):
+                header += f"🔗 {_esc(link)}\n"
             pub_ts = item.get("pub_date_timestamp", 0) or 0
             if pub_ts > 0:
                 pub_str = datetime.fromtimestamp(pub_ts).strftime("%d.%m.%Y %H:%M")
