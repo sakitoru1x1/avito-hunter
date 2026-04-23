@@ -62,7 +62,7 @@ class NotificationService:
             return False
         return self._notifier.send_message(text)
 
-    def send_new_items(self, new_items):
+    def send_new_items(self, new_items, fast=False):
         """Шлёт пачку новых объявлений из кэша.
 
         Фото берутся ТОЛЬКО из _img_cache (GUI уже скачал). Никаких сетевых
@@ -76,7 +76,7 @@ class NotificationService:
         if not self._notifier.enabled or not new_items:
             return
 
-        TG_MIN_INTERVAL = 1.2
+        TG_MIN_INTERVAL = 1.0 if fast else 1.2
         CAPTION_LIMIT = 1024
 
         new_items = sorted(new_items, key=lambda x: x.get("pub_date_timestamp", 0) or 0)

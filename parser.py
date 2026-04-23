@@ -371,7 +371,8 @@ class AvitoParser:
     def parse_items(self, driver, items, min_price, max_price,
                     search_query, filter_services, ignore_words,
                     known_ids, filtered_ids, stop_check,
-                    captcha_callback=None, get_driver=None):
+                    captcha_callback=None, get_driver=None,
+                    skip_batch=False):
         """Двухпроходный парсер.
 
         Pass 1 - лёгкое сканирование (id + дата + image_url) по ВСЕМ карточкам.
@@ -394,10 +395,13 @@ class AvitoParser:
         """
         total = len(items)
 
-        image_urls = self.extract_image_urls_batch(driver) if driver else {}
-        got_imgs = sum(1 for v in image_urls.values() if v)
-        if total:
-            self.log(f"🖼 Batch-извлечение URL картинок: {got_imgs}/{len(image_urls)}")
+        if skip_batch:
+            image_urls = {}
+        else:
+            image_urls = self.extract_image_urls_batch(driver) if driver else {}
+            got_imgs = sum(1 for v in image_urls.values() if v)
+            if total:
+                self.log(f"🖼 Batch-извлечение URL картинок: {got_imgs}/{len(image_urls)}")
 
         page_summary = []
         cards_to_parse = []
@@ -530,32 +534,33 @@ class AvitoParser:
                 logger.error(f"Ошибка при парсинге элемента: {e}")
                 continue
 
-        id_link_pairs = [[r["id"], r["link"]] for r in result if r.get("link") and r["link"] != "Н/Д"]
-        if id_link_pairs:
-            self.log(f"🕐 Получаю детали (дата + полное описание) для {len(id_link_pairs)} объявлений...")
-            _get_drv = get_driver or (lambda: driver)
-            details = self.fetch_detail_pages_batch(_get_drv, id_link_pairs, captcha_callback=captcha_callback)
-            got_date = 0
-            got_desc = 0
-            summary_by_id = {s["id"]: s for s in page_summary}
-            for r in result:
-                d = details.get(r["id"])
-                if not d:
-                    continue
-                date_text = d.get("date")
-                desc_text = d.get("description")
-                if date_text:
-                    ts = parse_date_to_timestamp(date_text)
-                    if ts > 0:
-                        r["date"] = date_text
-                        r["pub_date_timestamp"] = ts
-                        s = summary_by_id.get(r["id"])
-                        if s:
-                            s["pub_date_timestamp"] = ts
-                        got_date += 1
-                if desc_text and len(desc_text) > 10:
-                    r["description"] = desc_text
-                    got_desc += 1
-            self.log(f"   ✓ дата: {got_date}/{len(id_link_pairs)}, описание: {got_desc}/{len(id_link_pairs)}")
+        if not skip_batch:
+            id_link_pairs = [[r["id"], r["link"]] for r in result if r.get("link") and r["link"] != "Н/Д"]
+            if id_link_pairs:
+                self.log(f"🕐 Получаю детали (дата + полное описание) для {len(id_link_pairs)} объявлений...")
+                _get_drv = get_driver or (lambda: driver)
+                details = self.fetch_detail_pages_batch(_get_drv, id_link_pairs, captcha_callback=captcha_callback)
+                got_date = 0
+                got_desc = 0
+                summary_by_id = {s["id"]: s for s in page_summary}
+                for r in result:
+                    d = details.get(r["id"])
+                    if not d:
+                        continue
+                    date_text = d.get("date")
+                    desc_text = d.get("description")
+                    if date_text:
+                        ts = parse_date_to_timestamp(date_text)
+                        if ts > 0:
+                            r["date"] = date_text
+                            r["pub_date_timestamp"] = ts
+                            s = summary_by_id.get(r["id"])
+                            if s:
+                                s["pub_date_timestamp"] = ts
+                            got_date += 1
+                    if desc_text and len(desc_text) > 10:
+                        r["description"] = desc_text
+                        got_desc += 1
+                self.log(f"   ✓ дата: {got_date}/{len(id_link_pairs)}, описание: {got_desc}/{len(id_link_pairs)}")
 
         return result, page_summary

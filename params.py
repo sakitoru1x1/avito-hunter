@@ -33,3 +33,6 @@ class ParseParams:
     # Уведомления
     notify_sound: bool
     tg_notify_status: bool
+
+    # Режим скорости: без batch fetch деталей и без загрузки фото
+    speed_mode: bool = False

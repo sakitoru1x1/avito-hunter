@@ -65,6 +65,7 @@ class ParserApp:
         # перезапуск драйвера между headless и видимым режимами.
         self._chrome_profile_dir = os.path.join(os.path.expanduser("~"), ".avito-hunter", "chrome-profile")
         self._captcha_recovery_in_progress = False
+        self.cached_search_url = None
         self.previous_ids = set()
         self.stop_parsing = False
         self.max_items = DEFAULT_MAX_ITEMS
@@ -81,6 +82,8 @@ class ParserApp:
         self.tg_send_var = tk.BooleanVar(value=True)
         self.filter_services_var = tk.BooleanVar(value=False)
         self.delivery_var = tk.BooleanVar(value=False)
+        self.speed_mode_var = tk.BooleanVar(value=False)
+        self.no_gui_var = tk.BooleanVar(value=False)
 
         self.create_widgets()
         self.load_settings()
@@ -201,6 +204,20 @@ class ParserApp:
         self.max_interval = ctk.CTkEntry(row7, width=4*8)
         self.max_interval.pack(side="left", padx=2)
         self.max_interval.insert(0, "3")
+
+        self.speed_mode_cb = ctk.CTkSwitch(
+            row7, text="⚡ Скорость", variable=self.speed_mode_var,
+            onvalue=True, offvalue=False,
+            progress_color="#e8a020", button_color="#f0c040", button_hover_color="#f5d060",
+        )
+        self.speed_mode_cb.pack(side="left", padx=(12, 2))
+
+        self.no_gui_cb = ctk.CTkSwitch(
+            row7, text="🔇 Без GUI", variable=self.no_gui_var,
+            onvalue=True, offvalue=False,
+            progress_color="#c040e0", button_color="#d060f0", button_hover_color="#e080ff",
+        )
+        self.no_gui_cb.pack(side="left", padx=(8, 2))
 
         bottom_frame = ctk.CTkFrame(tab_results, border_width=1)
         bottom_frame.pack(fill="both", expand=True, pady=(5, 0))
@@ -1293,6 +1310,7 @@ yR1ByZ:paNHYV8EM7su - до двоеточия логин, после - паро�
             schedule_days=[bool(v.get()) for v in self.schedule_day_vars],
             notify_sound=bool(self.notify_var.get()),
             tg_notify_status=bool(self.tg_notify_status_var.get()),
+            speed_mode=bool(self.speed_mode_var.get()),
         )
 
     def run_parser(self, params: ParseParams):
@@ -1301,6 +1319,7 @@ yR1ByZ:paNHYV8EM7su - до двоеточия логин, после - паро�
         max_price = params.max_price
         city = params.city
         proxy_settings = params.proxy_settings
+        fast = params.speed_mode
 
         # Сбрасываем кэш отбракованных при смене любого фильтр-параметра
         filter_key = (
@@ -1352,7 +1371,7 @@ yR1ByZ:paNHYV8EM7su - до двоеточия логин, после - паро�
             if use_cached:
                 self.log(f"Открываем сохранённый URL (быстрый путь)")
                 driver.get(cached_url)
-                random_sleep(2.0, 3.5)
+                random_sleep(0.8, 1.5) if fast else random_sleep(2.0, 3.5)
                 try:
                     WebDriverWait(driver, 15).until(
                         EC.presence_of_element_located((By.CSS_SELECTOR, "[data-marker='item']"))
@@ -1383,12 +1402,12 @@ yR1ByZ:paNHYV8EM7su - до двоеточия логин, после - паро�
                     url = f"https://www.avito.ru/{city_slug}?q={encoded_query}&s=104"
                     self.log(f"Открываем URL для города {city}: {url}")
                     driver.get(url)
-                    random_sleep(4.0, 7.0)
+                    random_sleep(1.5, 2.5) if fast else random_sleep(4.0, 7.0)
                 else:
                     url = f"https://www.avito.ru/rossiya?q={encoded_query}&s=104"
                     self.log(f"Открываем URL для всей России: {url}")
                     driver.get(url)
-                    random_sleep(4.0, 7.0)
+                    random_sleep(1.5, 2.5) if fast else random_sleep(4.0, 7.0)
 
             if self.stop_parsing:
                 return
@@ -1401,7 +1420,7 @@ yR1ByZ:paNHYV8EM7su - до двоеточия логин, после - паро�
                     )
                     cookie_btn.click()
                     self.log("Куки приняты")
-                    random_sleep(0.7, 1.8)
+                    random_sleep(0.3, 0.6) if fast else random_sleep(0.7, 1.8)
                     if self.stop_parsing:
                         return
                 except TimeoutException:
@@ -1414,7 +1433,7 @@ yR1ByZ:paNHYV8EM7su - до двоеточия логин, после - паро�
                     )
                     city_btn.click()
                     self.log("Город подтверждён")
-                    random_sleep(1.5, 3.0)
+                    random_sleep(0.5, 1.0) if fast else random_sleep(1.5, 3.0)
                     if self.stop_parsing:
                         return
                 except TimeoutException:
@@ -1457,14 +1476,14 @@ yR1ByZ:paNHYV8EM7su - до двоеточия логин, после - паро�
                         search_url = self.cached_search_url or url
                         self.log(f"🔄 Перезагружаю поиск после капчи: {search_url}")
                         driver.get(search_url)
-                        random_sleep(3.0, 5.0)
+                        random_sleep(1.5, 2.5) if fast else random_sleep(3.0, 5.0)
                         WebDriverWait(driver, 15).until(
                             EC.presence_of_element_located((By.CSS_SELECTOR, "[data-marker='item']"))
                         )
                     else:
                         raise
                 self.log("Карточки загружены")
-                random_sleep(1.5, 3.0)
+                random_sleep(0.5, 1.0) if fast else random_sleep(1.5, 3.0)
                 if self.stop_parsing:
                     return
 
@@ -1473,7 +1492,7 @@ yR1ByZ:paNHYV8EM7su - до двоеточия логин, после - паро�
                     try:
                         self.log("Применяем фильтр 'Авито Доставка'...")
                         driver.execute_script("window.scrollBy(0, 300);")
-                        random_sleep(0.7, 1.6)
+                        random_sleep(0.3, 0.6) if fast else random_sleep(0.7, 1.6)
 
                         delivery_element = None
                         selectors = [
@@ -1487,7 +1506,7 @@ yR1ByZ:paNHYV8EM7su - до двоеточия логин, после - паро�
                                     EC.presence_of_element_located((by, selector))
                                 )
                                 driver.execute_script("arguments[0].scrollIntoView();", elem)
-                                random_sleep(0.4, 0.9)
+                                random_sleep(0.2, 0.4) if fast else random_sleep(0.4, 0.9)
                                 elem.click()
                                 delivery_element = elem
                                 break
@@ -1498,7 +1517,7 @@ yR1ByZ:paNHYV8EM7su - до двоеточия логин, после - паро�
                         if delivery_element is None:
                             self.log("Не удалось найти элемент 'Авито Доставка'")
                         else:
-                            random_sleep(1.5, 2.8)
+                            random_sleep(0.5, 1.0) if fast else random_sleep(1.5, 2.8)
                             try:
                                 show_span = WebDriverWait(driver, 10).until(
                                     EC.presence_of_element_located(
@@ -1509,7 +1528,7 @@ yR1ByZ:paNHYV8EM7su - до двоеточия логин, после - паро�
                             except (TimeoutException, NoSuchElementException) as e:
                                 self.log(f"Кнопка применения не найдена - возможно, фильтр применился сразу: {e}")
 
-                            random_sleep(2.5, 4.0)
+                            random_sleep(1.0, 1.5) if fast else random_sleep(2.5, 4.0)
                             try:
                                 WebDriverWait(driver, 25).until(
                                     EC.presence_of_element_located((By.CSS_SELECTOR, "[data-marker='item']"))
@@ -1554,7 +1573,7 @@ yR1ByZ:paNHYV8EM7su - до двоеточия логин, после - паро�
                 if current_position > last_height:
                     current_position = last_height
                 driver.execute_script(f"window.scrollTo(0, {current_position});")
-                time.sleep(random.uniform(0.2, 0.6))
+                time.sleep(random.uniform(0.1, 0.2) if fast else random.uniform(0.2, 0.6))
                 if self.stop_parsing:
                     return
 
@@ -1583,12 +1602,12 @@ yR1ByZ:paNHYV8EM7su - до двоеточия логин, после - паро�
                     if self.stop_parsing:
                         return
                     driver.execute_script(f"window.scrollTo(0, {y});")
-                    time.sleep(0.35)
+                    time.sleep(0.15 if fast else 0.35)
                     y += step
                 driver.execute_script(f"window.scrollTo(0, {total_h});")
-                time.sleep(0.3)
+                time.sleep(0.15 if fast else 0.3)
                 driver.execute_script("window.scrollTo(0, 0);")
-                time.sleep(0.3)
+                time.sleep(0.15 if fast else 0.3)
             except Exception:
                 pass
 
@@ -1649,10 +1668,11 @@ yR1ByZ:paNHYV8EM7su - до двоеточия логин, после - паро�
             # Запускаем скачивание фото в фоне, потом TG и GUI параллельно.
             # Оба берут картинки из общего кэша notifier._img_cache.
             all_items = self.history.get_all()
-            self._prefetch_images(all_items)
+            if not params.speed_mode:
+                self._prefetch_images(all_items)
 
             if added > 0:
-                self._tg_queue.put(list(self.history.iter_new()))
+                self._tg_queue.put((list(self.history.iter_new()), params.speed_mode))
 
             self.root.after(0, self.display_results)
 
@@ -1737,6 +1757,7 @@ yR1ByZ:paNHYV8EM7su - до двоеточия логин, после - паро�
                 params.proxy_settings, show_browser=params.show_browser,
             ),
             get_driver=lambda: self.driver_manager.driver,
+            skip_batch=params.speed_mode,
         )
 
     # ---------- Данные ----------
@@ -1804,9 +1825,13 @@ yR1ByZ:paNHYV8EM7su - до двоеточия логин, после - паро�
         """Фоновый воркер: берёт пачки объявлений из очереди и шлёт в TG."""
         while True:
             try:
-                new_items = self._tg_queue.get()
-                if new_items is None:
+                payload = self._tg_queue.get()
+                if payload is None:
                     break
+                if isinstance(payload, tuple):
+                    new_items, tg_fast = payload
+                else:
+                    new_items, tg_fast = payload, False
                 if not self.tg_send_var.get():
                     self._tg_queue.task_done()
                     continue
@@ -1814,24 +1839,25 @@ yR1ByZ:paNHYV8EM7su - до двоеточия логин, после - паро�
                     self._tg_queue.task_done()
                     continue
 
-                img_urls = [
-                    it.get("image_url") for it in new_items
-                    if it.get("image_url") not in (None, "", "Н/Д")
-                    and it["image_url"].startswith("http")
-                ]
-                if img_urls:
-                    deadline = time.time() + 20
-                    while time.time() < deadline:
-                        cached = sum(1 for u in img_urls if self.notifier.has_cached(u))
-                        if cached >= len(img_urls):
-                            self.log(f"📷 Все {cached} фото в кэше, шлём в TG")
-                            break
-                        time.sleep(1)
-                    else:
-                        cached = sum(1 for u in img_urls if self.notifier.has_cached(u))
-                        self.log(f"📷 Таймаут кэша: {cached}/{len(img_urls)} фото, шлём что есть")
+                if not tg_fast:
+                    img_urls = [
+                        it.get("image_url") for it in new_items
+                        if it.get("image_url") not in (None, "", "Н/Д")
+                        and it["image_url"].startswith("http")
+                    ]
+                    if img_urls:
+                        deadline = time.time() + 20
+                        while time.time() < deadline:
+                            cached = sum(1 for u in img_urls if self.notifier.has_cached(u))
+                            if cached >= len(img_urls):
+                                self.log(f"📷 Все {cached} фото в кэше, шлём в TG")
+                                break
+                            time.sleep(1)
+                        else:
+                            cached = sum(1 for u in img_urls if self.notifier.has_cached(u))
+                            self.log(f"📷 Таймаут кэша: {cached}/{len(img_urls)} фото, шлём что есть")
 
-                self.notifier.send_new_items(new_items)
+                self.notifier.send_new_items(new_items, fast=tg_fast)
                 self._tg_queue.task_done()
             except Exception as e:
                 logger.error(f"TG worker error: {e}")
@@ -1998,6 +2024,10 @@ yR1ByZ:paNHYV8EM7su - до двоеточия логин, после - паро�
     MAX_GUI_ITEMS = 50
 
     def display_results(self):
+        if self.no_gui_var.get():
+            count = len(self.history.get_all())
+            self.set_status(f"🔇 GUI отключён | объявлений: {count}")
+            return
         try:
             all_items = self.history.get_all()
             visible_items = all_items[:self.MAX_GUI_ITEMS]
