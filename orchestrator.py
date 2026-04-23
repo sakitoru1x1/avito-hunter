@@ -471,11 +471,12 @@ class ParserOrchestrator:
                     self.log("⚠️ Нет карточек и нет капчи - возможно блокировка без капчи")
                     is_captcha = True
             if is_captcha:
+                pre_captcha_url = driver.current_url
                 solved = self._recover_from_captcha(params)
                 if not solved:
                     raise TimeoutException("Капча не решена")
                 driver = self.driver_manager.driver
-                search_url = self.cached_search_url or ""
+                search_url = self.cached_search_url or pre_captcha_url
                 self.log(f"🔄 Перезагружаю поиск после капчи: {search_url}")
                 driver.get(search_url)
                 random_sleep(1.5, 2.5) if fast else random_sleep(3.0, 5.0)
