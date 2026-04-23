@@ -34,5 +34,9 @@ class ParseParams:
     notify_sound: bool
     tg_notify_status: bool
 
+    # Антикапча
+    captcha_api_key: str = ""
+    captcha_service: str = "rucaptcha"
+
     # Режим скорости: без batch fetch деталей и без загрузки фото
     speed_mode: bool = False

@@ -340,8 +340,8 @@ class AvitoParser:
             return {}
 
         import time as _time
-        CHUNK_SIZE = 10
-        CHUNK_PAUSE = 2.5
+        CHUNK_SIZE = 20
+        CHUNK_PAUSE = 1.0
         all_details = {}
 
         chunks = [id_link_pairs[i:i + CHUNK_SIZE]

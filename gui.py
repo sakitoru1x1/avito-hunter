@@ -6,7 +6,6 @@ import queue
 import time
 import random
 import requests
-import urllib.parse
 import webbrowser
 import os
 import sys
@@ -17,29 +16,19 @@ from io import BytesIO
 from concurrent.futures import ThreadPoolExecutor
 from PIL import Image
 
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
-from selenium.common.exceptions import TimeoutException, NoSuchElementException
-
 from config import CITIES, USER_AGENTS, SETTINGS_FILE, DEFAULT_MAX_ITEMS
-from utils import transliterate, parse_date_to_timestamp, sanitize_error_for_telegram, random_sleep, is_within_schedule
 from logger_setup import logger
 from telegram import TelegramNotifier
 from driver import DriverManager
-from storage import save_data, clear_history_files
-from errors import format_user_error, should_retry, backoff_seconds
+from storage import clear_history_files
 import database
 
-from parser import (
-    AvitoParser,
-    is_captcha_page as _parser_is_captcha_page,
-    detect_disappeared as _parser_detect_disappeared,
-)
+from parser import AvitoParser
 from history import HistoryService
 from notifier import NotificationService
 from settings_model import load_settings as load_app_settings, save_settings as save_app_settings, AppSettings
 from params import ParseParams
+from orchestrator import ParserOrchestrator, CycleResult
 
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
@@ -64,9 +53,6 @@ class ParserApp:
         # Постоянный профиль Chrome - куки (в т.ч. решённая капча) переживают
         # перезапуск драйвера между headless и видимым режимами.
         self._chrome_profile_dir = os.path.join(os.path.expanduser("~"), ".avito-hunter", "chrome-profile")
-        self._captcha_recovery_in_progress = False
-        self.cached_search_url = None
-        self.previous_ids = set()
         self.stop_parsing = False
         self.max_items = DEFAULT_MAX_ITEMS
         self.image_executor = ThreadPoolExecutor(max_workers=4)
@@ -77,6 +63,18 @@ class ParserApp:
         self.history = HistoryService(self.max_items, self.log)
         self.notifier = NotificationService(self.log)
         self.avito_parser = AvitoParser(self.log)
+        self.orchestrator = ParserOrchestrator(
+            driver_manager=self.driver_manager,
+            history=self.history,
+            notifier=self.notifier,
+            avito_parser=self.avito_parser,
+            image_executor=self.image_executor,
+            chrome_profile_dir=self._chrome_profile_dir,
+            tg_queue=self._tg_queue,
+            log=self.log,
+            set_status=self.set_status,
+            stop_check=lambda: self.stop_parsing,
+        )
 
         self.notify_var = tk.BooleanVar(value=True)
         self.tg_send_var = tk.BooleanVar(value=True)
@@ -1184,113 +1182,6 @@ yR1ByZ:paNHYV8EM7su - до двоеточия логин, после - паро�
             self.all_russia_var.set(False)
             self.city_var.set(city)
 
-    # ---------- Капча ----------
-    def _is_captcha_page(self, driver):
-        """Похоже ли текущая страница на стену капчи/firewall."""
-        try:
-            src = (driver.page_source or "").lower()
-        except Exception:
-            return False
-        markers = [
-            "captcha",
-            "firewall",
-            "доступ ограничен",
-            "подтвердите, что вы не робот",
-            "access-confirm",
-            "are you a robot",
-        ]
-        return any(m in src for m in markers)
-
-    def _try_auto_solve_captcha(self, driver):
-        """Пробует решить капчу автоматически через RuCaptcha/2Captcha.
-        Возвращает True при успехе, False если ключ не задан или решение не удалось."""
-        api_key = self.captcha_api_key_entry.get().strip()
-        if not api_key:
-            return False
-        svc = "2captcha" if self.captcha_service_var.get() == "2Captcha" else "rucaptcha"
-        try:
-            from captcha_solver import CaptchaSolver
-            solver = CaptchaSolver(api_key, service=svc, log_func=self.log)
-            self.log("🤖 Пробую автоматическое решение капчи...")
-            self.set_status("🤖 Решаю капчу автоматически...")
-            return solver.solve(driver)
-        except Exception as e:
-            self.log(f"⚠️ Ошибка авто-решения: {e}")
-            return False
-
-    def _recover_from_captcha(self, proxy_settings, show_browser: bool = False):
-        """Пробует авто-решение через API, при неудаче - видимый браузер для ручного."""
-        if self._captcha_recovery_in_progress:
-            self.log("🚧 Восстановление после капчи уже идёт - пропускаю")
-            return False
-        self._captcha_recovery_in_progress = True
-        try:
-            driver = self.driver_manager.driver
-            max_attempts = 3
-            for attempt in range(1, max_attempts + 1):
-                if driver and self._try_auto_solve_captcha(driver):
-                    self.log("✅ Капча решена автоматически")
-                    self.set_status("✅ Капча решена")
-                    import time
-                    time.sleep(3)
-                    return True
-                if attempt < max_attempts:
-                    from parser import is_captcha_page as _icp
-                    try:
-                        page_src = driver.page_source.lower() if driver else ""
-                    except Exception:
-                        page_src = ""
-                    if "доступ ограничен" in page_src or "проблема с ip" in page_src:
-                        self.log("🚫 Блокировка IP, ретраи бесполезны")
-                        break
-                    self.log(f"⏸ Попытка {attempt}/{max_attempts} не удалась, пробую ещё...")
-                    import time
-                    time.sleep(2)
-                    driver = self.driver_manager.driver
-
-            self.log("🚧 Открываю видимый браузер для сброса сессии (5 сек)...")
-            self.set_status("🚧 Сброс сессии через видимый браузер")
-
-            try:
-                self.driver_manager.hard_kill()
-            except Exception:
-                pass
-
-            if not self.driver_manager.ensure_driver(
-                proxy_settings, self.log,
-                show_browser=True,
-                user_data_dir=self._chrome_profile_dir,
-            ):
-                self.log("Не удалось открыть видимый браузер")
-                return False
-
-            try:
-                self.driver_manager.driver.get("https://www.avito.ru/")
-            except Exception as e:
-                self.log(f"Не удалось открыть avito.ru: {e}")
-
-            import time as _time
-            _time.sleep(5)
-            self.log("✓ Сессия сброшена, возвращаюсь в рабочий режим")
-
-            try:
-                self.driver_manager.hard_kill()
-            except Exception:
-                pass
-
-            if not self.driver_manager.ensure_driver(
-                proxy_settings, self.log,
-                show_browser=show_browser,
-                user_data_dir=self._chrome_profile_dir,
-            ):
-                self.log("Не удалось перезапустить драйвер после сброса")
-                return False
-
-            self.set_status("✓ Сессия сброшена")
-            return True
-        finally:
-            self._captcha_recovery_in_progress = False
-
     # ---------- Парсинг ----------
     def _build_parse_params(self, query, min_price, max_price, city) -> ParseParams:
         """Снимает все UI-зависимые значения в UI-потоке. Worker не трогает Tk."""
@@ -1310,420 +1201,30 @@ yR1ByZ:paNHYV8EM7su - до двоеточия логин, после - паро�
             schedule_days=[bool(v.get()) for v in self.schedule_day_vars],
             notify_sound=bool(self.notify_var.get()),
             tg_notify_status=bool(self.tg_notify_status_var.get()),
+            captcha_api_key=self.captcha_api_key_entry.get().strip(),
+            captcha_service="2captcha" if self.captcha_service_var.get() == "2Captcha" else "rucaptcha",
             speed_mode=bool(self.speed_mode_var.get()),
         )
 
     def run_parser(self, params: ParseParams):
-        query = params.query
-        min_price = params.min_price
-        max_price = params.max_price
-        city = params.city
-        proxy_settings = params.proxy_settings
-        fast = params.speed_mode
-
-        # Сбрасываем кэш отбракованных при смене любого фильтр-параметра
-        filter_key = (
-            query, min_price, max_price,
-            int(params.filter_services),
-            tuple(sorted(params.ignore_words)),
-        )
-        changed, prev_count = self.history.reset_filter_cache_if_changed(filter_key)
-        if changed and prev_count:
-            self.log(f"🔄 Фильтры изменились - сброс кэша отбракованных ({prev_count})")
-
-        # Проверка расписания
-        ok, reason = is_within_schedule(
-            params.schedule_enabled,
-            params.schedule_start,
-            params.schedule_end,
-            params.schedule_days,
-        )
-        if not ok:
-            self.log(f"⏸ {reason} - парсинг пропущен")
-            if params.tg_notify_status:
-                self.notifier.send_status(f"⏸ {reason}", status_enabled=True)
-            self.progress.stop()
-            if not self.auto_update:
-                self._set_idle_ui()
-            if self.auto_update:
-                self.root.after(100, self.schedule_next_auto)
-            return
-
-        if not self.driver_manager.ensure_driver(
-            proxy_settings, self.log,
-            show_browser=params.show_browser,
-            user_data_dir=self._chrome_profile_dir,
-        ):
-            self.log("Не удалось создать драйвер. Парсинг невозможен.")
-            self.progress.stop()
-            self._set_idle_ui()
-            return
-
-        driver = self.driver_manager.driver
-
         try:
-            encoded_query = urllib.parse.quote_plus(query)
-            search_key = f"{query}|{city}|{int(params.delivery)}"
-            cached_url = getattr(self, "cached_search_url", None)
-            cached_key = getattr(self, "cached_search_key", None)
-            use_cached = cached_url and cached_key == search_key
+            result = self.orchestrator.run_cycle(params)
 
-            if use_cached:
-                self.log(f"Открываем сохранённый URL (быстрый путь)")
-                driver.get(cached_url)
-                random_sleep(0.8, 1.5) if fast else random_sleep(2.0, 3.5)
-                try:
-                    WebDriverWait(driver, 15).until(
-                        EC.presence_of_element_located((By.CSS_SELECTOR, "[data-marker='item']"))
-                    )
-                    self.log("Карточки загружены")
-                except TimeoutException:
-                    if _parser_is_captcha_page(driver):
-                        solved = self._recover_from_captcha(proxy_settings, show_browser=params.show_browser)
-                        if not solved:
-                            return
-                        driver = self.driver_manager.driver
-                        try:
-                            WebDriverWait(driver, 10).until(
-                                EC.presence_of_element_located((By.CSS_SELECTOR, "[data-marker='item']"))
-                            )
-                            self.log("Карточки загружены после решения капчи")
-                        except TimeoutException:
-                            self.cached_search_url = None
-                            use_cached = False
-                    else:
-                        self.log("Кеш URL не сработал, идём долгим путём")
-                        self.cached_search_url = None
-                        use_cached = False
-
-            if not use_cached:
-                if city and city != "Вся Россия":
-                    city_slug = transliterate(city)
-                    url = f"https://www.avito.ru/{city_slug}?q={encoded_query}&s=104"
-                    self.log(f"Открываем URL для города {city}: {url}")
-                    driver.get(url)
-                    random_sleep(1.5, 2.5) if fast else random_sleep(4.0, 7.0)
-                else:
-                    url = f"https://www.avito.ru/rossiya?q={encoded_query}&s=104"
-                    self.log(f"Открываем URL для всей России: {url}")
-                    driver.get(url)
-                    random_sleep(1.5, 2.5) if fast else random_sleep(4.0, 7.0)
-
-            if self.stop_parsing:
-                return
-
-            if not use_cached:
-                # Принимаем куки
-                try:
-                    cookie_btn = WebDriverWait(driver, 5).until(
-                        EC.element_to_be_clickable((By.XPATH, '//button[contains(text(),"Принять")]'))
-                    )
-                    cookie_btn.click()
-                    self.log("Куки приняты")
-                    random_sleep(0.3, 0.6) if fast else random_sleep(0.7, 1.8)
-                    if self.stop_parsing:
-                        return
-                except TimeoutException:
-                    self.log("Куки уже приняты")
-
-                # Подтверждаем город
-                try:
-                    city_btn = WebDriverWait(driver, 5).until(
-                        EC.element_to_be_clickable((By.XPATH, '//button[contains(text(),"Да")]'))
-                    )
-                    city_btn.click()
-                    self.log("Город подтверждён")
-                    random_sleep(0.5, 1.0) if fast else random_sleep(1.5, 3.0)
-                    if self.stop_parsing:
-                        return
-                except TimeoutException:
-                    pass
-
-                # Поиск
-                try:
-                    search_input = WebDriverWait(driver, 10).until(
-                        EC.presence_of_element_located((By.CSS_SELECTOR, "input[data-marker='search-form/suggest']"))
-                    )
-                    search_input.clear()
-                    search_input.send_keys(query)
-                    search_button = WebDriverWait(driver, 5).until(
-                        EC.element_to_be_clickable((By.CSS_SELECTOR, "button[data-marker='search-form/submit-button']"))
-                    )
-                    search_button.click()
-                    self.log("Поиск выполнен")
-                    if self.stop_parsing:
-                        return
-                except (TimeoutException, NoSuchElementException):
-                    self.log("URL уже содержит запрос")
-
-                try:
-                    WebDriverWait(driver, 15).until(
-                        EC.presence_of_element_located((By.CSS_SELECTOR, "[data-marker='item']"))
-                    )
-                except TimeoutException:
-                    is_captcha = _parser_is_captcha_page(driver)
-                    if not is_captcha:
-                        src = (driver.page_source or "")[:500].lower()
-                        has_items = "data-marker" in src and "item" in src
-                        if not has_items:
-                            self.log("⚠️ Нет карточек и нет капчи - возможно блокировка без капчи")
-                            is_captcha = True
-                    if is_captcha:
-                        solved = self._recover_from_captcha(proxy_settings, show_browser=params.show_browser)
-                        if not solved:
-                            return
-                        driver = self.driver_manager.driver
-                        search_url = self.cached_search_url or url
-                        self.log(f"🔄 Перезагружаю поиск после капчи: {search_url}")
-                        driver.get(search_url)
-                        random_sleep(1.5, 2.5) if fast else random_sleep(3.0, 5.0)
-                        WebDriverWait(driver, 15).until(
-                            EC.presence_of_element_located((By.CSS_SELECTOR, "[data-marker='item']"))
-                        )
-                    else:
-                        raise
-                self.log("Карточки загружены")
-                random_sleep(0.5, 1.0) if fast else random_sleep(1.5, 3.0)
-                if self.stop_parsing:
-                    return
-
-                # ===== Фильтр "Авито доставка" =====
-                if params.delivery:
-                    try:
-                        self.log("Применяем фильтр 'Авито Доставка'...")
-                        driver.execute_script("window.scrollBy(0, 300);")
-                        random_sleep(0.3, 0.6) if fast else random_sleep(0.7, 1.6)
-
-                        delivery_element = None
-                        selectors = [
-                            (By.XPATH, "//span[contains(text(),'С Авито Доставкой')]"),
-                            (By.XPATH, "//label[contains(.,'С Авито Доставкой')]"),
-                        ]
-
-                        for by, selector in selectors:
-                            try:
-                                elem = WebDriverWait(driver, 5).until(
-                                    EC.presence_of_element_located((by, selector))
-                                )
-                                driver.execute_script("arguments[0].scrollIntoView();", elem)
-                                random_sleep(0.2, 0.4) if fast else random_sleep(0.4, 0.9)
-                                elem.click()
-                                delivery_element = elem
-                                break
-                            except (TimeoutException, NoSuchElementException) as e:
-                                self.log(f"Не удалось по селектору {selector}: {e}")
-                                continue
-
-                        if delivery_element is None:
-                            self.log("Не удалось найти элемент 'Авито Доставка'")
-                        else:
-                            random_sleep(0.5, 1.0) if fast else random_sleep(1.5, 2.8)
-                            try:
-                                show_span = WebDriverWait(driver, 10).until(
-                                    EC.presence_of_element_located(
-                                        (By.XPATH, "//span[starts-with(text(),'Показать')]"))
-                                )
-                                parent_button = show_span.find_element(By.XPATH, "ancestor::button")
-                                parent_button.click()
-                            except (TimeoutException, NoSuchElementException) as e:
-                                self.log(f"Кнопка применения не найдена - возможно, фильтр применился сразу: {e}")
-
-                            random_sleep(1.0, 1.5) if fast else random_sleep(2.5, 4.0)
-                            try:
-                                WebDriverWait(driver, 25).until(
-                                    EC.presence_of_element_located((By.CSS_SELECTOR, "[data-marker='item']"))
-                                )
-                            except TimeoutException:
-                                self.log("После фильтра доставки карточки не появились за 25с - продолжаем с текущей страницей")
-
-                    except Exception as e:
-                        self.log(f"Не удалось применить фильтр доставки (пропускаем): {e}")
-                        logger.error(f"Ошибка при фильтре доставки: {traceback.format_exc()}")
-
-                # Сохраняем финальный URL чтобы следующие циклы шли быстрым путём
-                try:
-                    self.cached_search_url = driver.current_url
-                    self.cached_search_key = search_key
-                    self.log("URL сохранён для быстрых перезапросов")
-                except Exception:
-                    pass
-
-            # Прокрутка - до 50 карточек либо до конца страницы
-            self.log("Прокручиваем страницу...")
-            target_cards = 50
-            last_height = driver.execute_script("return document.body.scrollHeight")
-            current_position = 0
-            max_scroll_attempts = 15
-            attempts = 0
-
-            while attempts < max_scroll_attempts:
-                if self.stop_parsing:
-                    self.log("Прокрутка прервана")
-                    return
-
-                cards_in_dom = driver.execute_script(
-                    "return document.querySelectorAll(\"[data-marker='item']\").length;"
-                )
-                if cards_in_dom >= target_cards:
-                    self.log(f"Набрано {cards_in_dom} карточек, прокрутка не нужна")
-                    break
-
-                scroll_step = random.randint(600, 1200)
-                current_position += scroll_step
-                if current_position > last_height:
-                    current_position = last_height
-                driver.execute_script(f"window.scrollTo(0, {current_position});")
-                time.sleep(random.uniform(0.1, 0.2) if fast else random.uniform(0.2, 0.6))
-                if self.stop_parsing:
-                    return
-
-                new_height = driver.execute_script("return document.body.scrollHeight")
-                if new_height > last_height:
-                    last_height = new_height
-                    attempts = 0
-                else:
-                    attempts += 1
-
-                if current_position >= last_height - 100:
-                    self.log("Достигнут конец страницы.")
-                    break
-
-            self.log("Прокрутка завершена")
-
-            # Постепенный скролл по всей странице, чтобы IntersectionObserver
-            # успел сработать для каждой карточки (lazy-loader завязан на появление
-            # в viewport). Один быстрый nudge низ->верх пропускает средние
-            # карточки - браузер их "перелетает" без срабатывания observer.
-            try:
-                total_h = driver.execute_script("return document.body.scrollHeight") or 0
-                step = 600
-                y = 0
-                while y < total_h:
-                    if self.stop_parsing:
-                        return
-                    driver.execute_script(f"window.scrollTo(0, {y});")
-                    time.sleep(0.15 if fast else 0.35)
-                    y += step
-                driver.execute_script(f"window.scrollTo(0, {total_h});")
-                time.sleep(0.15 if fast else 0.3)
-                driver.execute_script("window.scrollTo(0, 0);")
-                time.sleep(0.15 if fast else 0.3)
-            except Exception:
-                pass
-
-            if self.stop_parsing:
-                return
-
-            items = driver.find_elements(By.CSS_SELECTOR, "[data-marker='item']")
-            self.log(f"Найдено карточек: {len(items)}")
-            self.set_status(f"📋 Обработка карточек: {len(items)}")
-            new_results, page_summary = self.parse_items(items, params)
-
-            if getattr(self.avito_parser, 'had_rate_limit', False):
-                self.cached_search_url = None
-                self._rate_limit_fast_restart = True
-                self.log("🔄 Rate-limit обнаружен, быстрый перезапуск для сброса капчи")
-
-            self.log(f"Новых после фильтров: {len(new_results)}")
-
-            # Retry фото у старых объявлений: если у них image_url=="Н/Д" и
-            # они сейчас на странице с живым URL - обновляем. Работает даже если
-            # на прошлом цикле фото не успело подгрузиться.
-            ps_by_id = {p["id"]: p for p in page_summary}
-            retry_updated_items = self.history.apply_retry_image_updates(ps_by_id)
-            if retry_updated_items:
-                self.log(f"🖼 Догружено фото у {len(retry_updated_items)} старых объявлений")
-
-            disappeared = _parser_detect_disappeared(self.history.get_all(), page_summary, query)
-            if disappeared:
-                database.mark_inactive([it["id"] for it in disappeared])
-                self.send_disappeared_notification(disappeared)
-
-            added = self.history.update_with_new(new_results)
-            if added > 0:
-                self.log(f"Добавлено новых объявлений: {added}")
-            else:
-                self.log("Новых объявлений не найдено")
-
-            if added > 0 and params.notify_sound:
-                NotificationService.play_sound()
-
-            # Пишем в БД только изменившееся: новые + те, у кого догрузили фото.
-            # Раньше сохраняли self.all_items целиком - это 500+ UPSERT каждый цикл
-            # даже если нового 0 штук.
-            dirty = list(new_results)
-            if retry_updated_items:
-                dirty_ids = {it["id"] for it in dirty}
-                for it in retry_updated_items:
-                    if it["id"] not in dirty_ids:
-                        dirty.append(it)
-            if dirty:
-                save_data(dirty, self.log)
-
-            # Инвалидируем кеш отрисованных карточек если список реально изменился -
-            # иначе display_results через fast-path обновит только цвет is_new.
-            if added > 0 or retry_updated_items:
+            if result.items_changed:
                 self._rendered_order = None
 
-            # Запускаем скачивание фото в фоне, потом TG и GUI параллельно.
-            # Оба берут картинки из общего кэша notifier._img_cache.
-            all_items = self.history.get_all()
-            if not params.speed_mode:
-                self._prefetch_images(all_items)
+            if result.tg_items:
+                self._tg_queue.put((result.tg_items, params.speed_mode))
 
-            if added > 0:
-                self._tg_queue.put((list(self.history.iter_new()), params.speed_mode))
+            if not result.skipped_schedule and not result.driver_failed:
+                self.root.after(0, self.display_results)
 
-            self.root.after(0, self.display_results)
-
-            self.set_status(
-                f"✅ Готово. Новых: {added}",
-                counter=f"Всего в БД: {self.history.count()}",
-            )
-
-        except Exception as e:
-            if self.stop_parsing:
-                # Жёсткий стоп: драйвер убит извне, Selenium кинул exception.
-                # Не спамим логи и Telegram.
-                logger.info(f"Парсер остановлен (жёсткий стоп): {type(e).__name__}")
-                return
-            error_trace = traceback.format_exc()
-            user_msg = format_user_error(e, context="parser")
-            self.log(user_msg)
-            logger.error(f"Ошибка парсинга: {error_trace}")
-            # Notifier уже сконфигурирован в start_parsing - шлём напрямую, Tk не трогаем.
-            if params.tg_notify_status:
-                self.notifier.send_status(user_msg, status_enabled=True)
-            self.notifier.send_error(error_trace)
-            self.set_status(user_msg[:80])
-
-            # --- 1.4 Recovery: задержка при 429/403 от Авито + перезапуск Chrome если сессия мертва ---
-            if should_retry(e):
-                try:
-                    from selenium.common.exceptions import WebDriverException
-                    if isinstance(e, WebDriverException):
-                        self.log("🔄 Перезапускаем браузер...")
-                        self.driver_manager.cleanup()
-                    msg_l = str(e).lower()
-                    if any(s in msg_l for s in ("429", "403", "too many", "rate limit")):
-                        wait = backoff_seconds(getattr(self, "_avito_block_attempts", 0))
-                        self._avito_block_attempts = getattr(self, "_avito_block_attempts", 0) + 1
-                        self.set_status(f"⏸ Авито блокирует. Жду {wait} сек перед повтором...")
-                        self.log(f"⏸ Backoff {wait} сек (попытка {self._avito_block_attempts})")
-                        time.sleep(wait)
-                    else:
-                        self._avito_block_attempts = 0
-                except Exception:
-                    pass
-            else:
-                self._avito_block_attempts = 0
         finally:
             self.progress.stop()
             if not self.auto_update:
                 self._set_idle_ui()
             if self.auto_update:
-                if getattr(self, '_rate_limit_fast_restart', False):
-                    self._rate_limit_fast_restart = False
+                if result.rate_limit_restart:
                     self.log("⚡ Быстрый перезапуск через 5 сек (сброс rate-limit)")
                     try:
                         self.driver_manager.cleanup()
@@ -1739,26 +1240,6 @@ yR1ByZ:paNHYV8EM7su - до двоеточия логин, после - паро�
         if not raw:
             return []
         return [w.strip().lower() for w in raw.split(",") if w.strip()]
-
-    def parse_items(self, items, params: ParseParams):
-        """Тонкий шим над AvitoParser - передаёт снимок UI + состояние БД."""
-        return self.avito_parser.parse_items(
-            driver=self.driver_manager.driver,
-            items=items,
-            min_price=params.min_price,
-            max_price=params.max_price,
-            search_query=params.query,
-            filter_services=params.filter_services,
-            ignore_words=params.ignore_words,
-            known_ids=self.history.known_ids(),
-            filtered_ids=self.history.get_filtered_ids(),
-            stop_check=lambda: self.stop_parsing,
-            captcha_callback=lambda: self._recover_from_captcha(
-                params.proxy_settings, show_browser=params.show_browser,
-            ),
-            get_driver=lambda: self.driver_manager.driver,
-            skip_batch=params.speed_mode,
-        )
 
     # ---------- Данные ----------
     def _load_data(self):
@@ -1865,23 +1346,6 @@ yR1ByZ:paNHYV8EM7su - до двоеточия логин, после - паро�
                     self._tg_queue.task_done()
                 except ValueError:
                     pass
-
-    def send_disappeared_notification(self, disappeared):
-        if not disappeared:
-            return
-        if not self.update_telegram_notifier():
-            return
-        self.notifier.send_disappeared(disappeared)
-
-    def _prefetch_images(self, items):
-        """Запускает скачивание картинок в image_executor для заполнения кэша.
-        TG и GUI потом берут из общего кэша."""
-        session = self._build_image_session()
-        for item in items:
-            url = item.get("image_url")
-            if url and url != "Н/Д" and url.startswith("http"):
-                if not self.notifier.has_cached(url):
-                    self.image_executor.submit(self.notifier.fetch_image_bytes, session, url)
 
     # ---------- Загрузка изображений ----------
     def _load_image_async(self, session, image_url, img_label, card, gen):
