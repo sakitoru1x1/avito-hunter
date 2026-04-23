@@ -1,0 +1,7 @@
+selenium>=4.15.0
+requests>=2.31.0
+webdriver-manager>=4.0.0
+selenium-stealth>=1.0.6
+Pillow>=10.0.0
+customtkinter>=5.2.0
+2captcha-python>=1.5.0
