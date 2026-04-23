@@ -330,10 +330,11 @@ class AvitoParser:
     def fetch_detail_pages_batch(self, get_driver, id_link_pairs, captcha_callback=None):
         """Забирает дату и описание пачками по 10 с паузой между ними.
 
-        get_driver: callable возвращающий актуальный Selenium driver.
-        Различает rate-limit (HTTP-блок на fetch) и реальную капчу (GeeTest/hCaptcha).
-        При rate-limit просто ждёт и ретраит. Капчу решает через callback.
+        Без ретраев: что получил - то получил. При rate-limit (>50% ошибок)
+        прекращает оставшиеся пачки и ставит self.had_rate_limit = True,
+        чтобы вызывающий код сбросил кеш и перезагрузил страницу.
         """
+        self.had_rate_limit = False
         driver = get_driver() if callable(get_driver) else get_driver
         if not id_link_pairs or not driver:
             return {}
@@ -341,8 +342,6 @@ class AvitoParser:
         import time as _time
         CHUNK_SIZE = 10
         CHUNK_PAUSE = 2.5
-        RATE_LIMIT_PAUSE = 8
-        MAX_RATE_LIMIT_RETRIES = 3
         all_details = {}
 
         chunks = [id_link_pairs[i:i + CHUNK_SIZE]
@@ -354,86 +353,18 @@ class AvitoParser:
 
             driver = get_driver() if callable(get_driver) else get_driver
             chunk_result, is_captcha, is_rate_limit = self._fetch_one_chunk(driver, chunk)
-
-            if is_rate_limit:
-                self.log(f"⏸ 403/429 на пачке {idx + 1}/{len(chunks)}, жду и повторяю...")
-                partial = dict(chunk_result)
-                got_ids = set(partial.keys())
-                retry_chunk = [pair for pair in chunk if pair[0] not in got_ids]
-                for retry in range(MAX_RATE_LIMIT_RETRIES):
-                    _time.sleep(RATE_LIMIT_PAUSE * (retry + 1))
-                    driver = get_driver() if callable(get_driver) else get_driver
-                    retry_result, _, still_limited = self._fetch_one_chunk(driver, retry_chunk)
-                    partial.update(retry_result)
-                    got_ids.update(retry_result.keys())
-                    retry_chunk = [pair for pair in chunk if pair[0] not in got_ids]
-                    if not still_limited or not retry_chunk:
-                        break
-                    self.log(f"   ⏸ Retry {retry + 1}/{MAX_RATE_LIMIT_RETRIES}...")
-                all_details.update(partial)
-                self.log(f"   📦 Пачка {idx + 1}/{len(chunks)}: +{len(partial)} деталей (после retry)")
-                continue
-
-            if is_captcha:
-                self.log(f"🔒 Блок на пачке {idx + 1}/{len(chunks)}, определяю тип...")
-                current_url = driver.current_url
-
-                real_captcha = False
-                try:
-                    driver.get(chunk[0][1])
-                    WebDriverWait(driver, 10).until(
-                        lambda d: d.execute_script("return document.readyState") in ("interactive", "complete")
-                    )
-                    real_captcha = is_captcha_page(driver)
-                except Exception:
-                    real_captcha = True
-
-                if not real_captcha:
-                    self.log("⏸ Rate-limit (не капча). Жду и повторяю пачку...")
-                    try:
-                        driver.get(current_url)
-                    except Exception:
-                        pass
-                    retried = False
-                    for retry in range(MAX_RATE_LIMIT_RETRIES):
-                        _time.sleep(RATE_LIMIT_PAUSE * (retry + 1))
-                        driver = get_driver() if callable(get_driver) else get_driver
-                        chunk_result, is_captcha, _ = self._fetch_one_chunk(driver, chunk)
-                        if not is_captcha:
-                            retried = True
-                            break
-                        self.log(f"   ⏸ Retry {retry + 1}/{MAX_RATE_LIMIT_RETRIES}...")
-                    if retried:
-                        all_details.update(chunk_result)
-                        self.log(f"   📦 Пачка {idx + 1}/{len(chunks)}: +{len(chunk_result)} деталей (после retry)")
-                        continue
-                    self.log(f"⚠️ Rate-limit не снялся после {MAX_RATE_LIMIT_RETRIES} попыток, пропускаю остаток")
-                    break
-
-                self.log("🔒 Реальная капча на странице")
-                if captcha_callback:
-                    self.log("🤖 Решаю капчу...")
-                    solved = captcha_callback()
-                    driver = get_driver() if callable(get_driver) else get_driver
-                    if solved:
-                        try:
-                            driver.get(current_url)
-                            _time.sleep(2)
-                        except Exception:
-                            pass
-                        chunk_result, is_captcha = self._fetch_one_chunk(driver, chunk)
-                        if is_captcha:
-                            self.log(f"⚠️ Капча не решена, пропускаю пачку {idx + 1}")
-                            continue
-                    else:
-                        self.log("⚠️ Не удалось решить капчу, пропускаю остаток")
-                        break
-                else:
-                    self.log(f"⚠️ Капча, нет авто-решения, пропускаю остаток")
-                    break
-
             all_details.update(chunk_result)
             self.log(f"   📦 Пачка {idx + 1}/{len(chunks)}: +{len(chunk_result)} деталей")
+
+            if is_rate_limit or is_captcha:
+                self.had_rate_limit = True
+                remaining = len(chunks) - idx - 1
+                if remaining > 0:
+                    self.log(f"⚠️ Rate-limit на пачке {idx + 1}, пропускаю {remaining} оставшихся")
+                break
+
+        if self.had_rate_limit:
+            self.log("🔄 Rate-limit обнаружен, следующий цикл перезагрузит страницу для сброса капчи")
 
         return all_details
 

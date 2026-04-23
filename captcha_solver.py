@@ -122,14 +122,19 @@ class CaptchaSolver:
             logger.warning(f"Ошибка определения типа капчи: {e}")
             return {"type": "unknown"}
 
-    def _wait_captcha_resolved(self, driver, timeout=15):
+    def _wait_captcha_resolved(self, driver, timeout=20):
         """Ждёт пока страница перезагрузится после verify.
 
-        Проверяет появление карточек ИЛИ исчезновение маркеров капчи.
+        Сначала ждём reload (fetch → .then → location.reload асинхронный),
+        потом проверяем появление карточек ИЛИ исчезновение маркеров капчи.
         """
+        time.sleep(3)
         for _ in range(timeout):
             time.sleep(1)
             try:
+                ready = driver.execute_script("return document.readyState")
+                if ready != "complete":
+                    continue
                 src = (driver.page_source or "").lower()
                 has_items = 'data-marker="item"' in src or "data-marker='item'" in src
                 if has_items:
