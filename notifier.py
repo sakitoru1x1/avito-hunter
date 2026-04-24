@@ -12,6 +12,62 @@ from utils import sanitize_error_for_telegram
 from logger_setup import logger
 
 
+_SHOP_KEYWORDS = (
+    "магазин", "shop", "store", "ооо", "ип ", "маркет", "market",
+    "trade", "трейд", "салон", "центр", "компания", "group", "груп", "оптом",
+    "ltd", "inc", "торг", "сервис", "service", "студия", "studio",
+    "дисконт", "outlet", "склад", "warehouse", "бутик", "boutique",
+    "plaza", "плаза", "базар", "mall", "молл", "ритейл", "retail",
+)
+
+_COMMERCIAL_KEYWORDS = (
+    "трейд-ин", "трейд ин", "trade-in", "trade in",
+    "кредит", "рассрочк", "обмен вашего", "обмен старого",
+    "выкуп", "скупка", "принимаем старые", "сдай старый",
+)
+
+
+def _classify_seller(item):
+    name = (item.get("seller_name") or "").lower()
+    ads = item.get("seller_ads")
+    reviews = item.get("seller_reviews")
+    since = item.get("seller_since")
+    desc = (item.get("description") or "").lower()
+
+    if ads is None and reviews is None and not since and not name:
+        return None
+
+    ads = ads or 0
+    reviews = reviews or 0
+    has_commercial = any(kw in desc for kw in _COMMERCIAL_KEYWORDS)
+
+    rating = item.get("seller_rating")
+    ratings_count = int(rating) if rating and rating > 0 else 0
+
+    if name in ("пользователь", "") and ads <= 3:
+        return "👤 частник"
+    if any(kw in name for kw in _SHOP_KEYWORDS):
+        return "🏪 магазин"
+    if ads >= 50:
+        return "🏪 магазин"
+    if ads >= 20 and reviews >= 30 and has_commercial:
+        return "🏪 магазин"
+    if ads >= 20 and has_commercial:
+        return "🏬 скорее магазин или перекупщик"
+    if ads >= 20:
+        return "🏬 скорее магазин или перекупщик"
+    if ads >= 10 and has_commercial:
+        return "🏬 скорее магазин или перекупщик"
+    if ads >= 10:
+        return "🏬 скорее магазин или перекупщик"
+    if ads >= 5 and has_commercial:
+        return "🏬 скорее магазин или перекупщик"
+    if reviews >= 30 or ratings_count >= 20:
+        return "🏬 скорее магазин или перекупщик"
+
+    return "👤 частник"
+
+
 class NotificationService:
     """Одно место для всех уведомлений. Thread-safe кеш картинок."""
 
@@ -22,6 +78,9 @@ class NotificationService:
         self._img_cache_order = []
         self._img_cache_max = 256
         self._img_cache_lock = threading.Lock()
+        self._last_error_msg = None
+        self._last_error_time = 0
+        self._error_cooldown = 300
 
     # ---------- Конфигурация ----------
     def configure(self, token, chat_id, proxies=None):
@@ -50,11 +109,15 @@ class NotificationService:
     def send_error(self, error_text):
         if not self._notifier.enabled:
             return False
+        now = time.monotonic()
+        if error_text == self._last_error_msg and (now - self._last_error_time) < self._error_cooldown:
+            return False
+        self._last_error_msg = error_text
+        self._last_error_time = now
         error_text = sanitize_error_for_telegram(error_text)
-        if len(error_text) > 3500:
-            error_text = error_text[:3500] + "..."
-        msg = f"<b>❌ Ошибка в программе</b>\n<pre>{error_text}</pre>"
-        return self._notifier.send_message(msg)
+        if len(error_text) > 500:
+            error_text = error_text[:500] + "..."
+        return self._notifier.send_message(f"<b>⚠️ {error_text}</b>")
 
     def send_raw(self, text):
         """Прямая отправка текста (для тестов и ручных вызовов)."""
@@ -117,8 +180,40 @@ class NotificationService:
                 pub_str = datetime.fromtimestamp(pub_ts).strftime("%d.%m.%Y %H:%M")
             else:
                 pub_str = item.get("date", "Н/Д")
-            header += f"🕐 На Авито: {_esc(pub_str)}\n"
-            header += f"📥 В программе: {_esc(item.get('first_seen', 'Н/Д'))}"
+            header += f"🕐 {_esc(pub_str)}\n"
+
+            seller_parts = []
+            sn = item.get("seller_name")
+            if sn:
+                seller_parts.append(_esc(sn))
+            sr = item.get("seller_rating")
+            if sr:
+                rev = item.get("seller_reviews")
+                seller_parts.append(f"★{sr}" + (f"({rev})" if rev else ""))
+            ss = item.get("seller_since")
+            if ss:
+                seller_parts.append(f"с {ss}")
+            sa = item.get("seller_ads")
+            if sa:
+                seller_parts.append(f"{sa} объявл.")
+            if seller_parts:
+                header += f"👤 {' · '.join(seller_parts)}\n"
+
+            seller_label = _classify_seller(item)
+            if seller_label:
+                header += f"{seller_label}\n"
+
+            loc = item.get("location")
+            vc = item.get("view_count")
+            if loc or vc:
+                loc_parts = []
+                if loc:
+                    loc_parts.append(_esc(loc))
+                if vc:
+                    loc_parts.append(f"👁{vc}")
+                header += f"📍 {' · '.join(loc_parts)}"
+            else:
+                header = header.rstrip("\n")
 
             desc = item.get('description', '') or ''
             caption = header

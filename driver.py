@@ -1,3 +1,4 @@
+import atexit
 import os
 import random
 import shutil
@@ -17,6 +18,50 @@ from selenium.common.exceptions import WebDriverException
 from config import USER_AGENTS
 from logger_setup import logger
 from errors import format_user_error
+
+
+_PID_FILE = os.path.join(os.path.expanduser("~"), ".avito-hunter", "chromedriver.pid")
+
+
+def _save_pid(pid):
+    """Сохраняет PID chromedriver в файл для очистки при следующем запуске."""
+    try:
+        os.makedirs(os.path.dirname(_PID_FILE), exist_ok=True)
+        with open(_PID_FILE, "w") as f:
+            f.write(str(pid))
+    except Exception:
+        pass
+
+
+def _clear_pid():
+    """Удаляет PID-файл."""
+    try:
+        if os.path.exists(_PID_FILE):
+            os.remove(_PID_FILE)
+    except Exception:
+        pass
+
+
+def cleanup_stale_chrome():
+    """Убивает зависшие chromedriver/chrome от предыдущих сессий.
+
+    Вызывается при старте программы. Сначала tree-kill по PID,
+    потом orphan cleanup по user-data-dir на случай если PID уже мёртв.
+    """
+    if os.path.exists(_PID_FILE):
+        try:
+            with open(_PID_FILE, "r") as f:
+                old_pid = int(f.read().strip())
+            logger.info(f"Найден PID предыдущего chromedriver: {old_pid}, убиваю...")
+            _kill_process_tree(old_pid)
+            logger.info(f"Зависшие процессы chromedriver (pid={old_pid}) очищены")
+        except (ValueError, FileNotFoundError):
+            pass
+        except Exception as e:
+            logger.warning(f"Не удалось очистить зависшие процессы: {e}")
+        finally:
+            _clear_pid()
+    _kill_orphan_chrome()
 
 
 def _kill_process_tree(pid):
@@ -53,6 +98,60 @@ def _kill_process_tree(pid):
                     pass
     except Exception as e:
         logger.warning(f"tree-kill pid={pid} упал: {e}")
+
+
+def _kill_orphan_chrome():
+    """Убивает chrome.exe-сироты с нашим user-data-dir.
+
+    Когда программу убивают жёстко, chromedriver уже мёртв и taskkill по PID
+    не находит дерево. Chrome-дети (renderer, gpu, network) живут дальше
+    и блокируют профиль. Ищем их по командной строке.
+    """
+    profile_marker = os.path.join(".avito-hunter", "chrome-profile")
+    if sys.platform == "win32":
+        try:
+            result = subprocess.run(
+                ["wmic", "process", "where",
+                 "name='chrome.exe' or name='chromedriver.exe'",
+                 "get", "ProcessId,CommandLine", "/FORMAT:CSV"],
+                capture_output=True, text=True, timeout=10,
+            )
+            killed = 0
+            for line in result.stdout.splitlines():
+                if profile_marker.replace("/", "\\") in line or profile_marker in line:
+                    parts = line.strip().rstrip(",").split(",")
+                    try:
+                        pid = int(parts[-1])
+                        subprocess.run(
+                            ["taskkill", "/F", "/PID", str(pid)],
+                            capture_output=True, timeout=5,
+                        )
+                        killed += 1
+                    except (ValueError, IndexError):
+                        pass
+            if killed:
+                logger.info(f"Убито {killed} orphan chrome-процессов")
+        except Exception as e:
+            logger.warning(f"orphan chrome cleanup: {e}")
+    else:
+        try:
+            import psutil
+            killed = 0
+            for proc in psutil.process_iter(["pid", "name", "cmdline"]):
+                name = (proc.info["name"] or "").lower()
+                if name not in ("chrome", "chrome.exe", "chromedriver", "chromedriver.exe"):
+                    continue
+                cmdline = " ".join(proc.info["cmdline"] or [])
+                if profile_marker in cmdline:
+                    try:
+                        proc.kill()
+                        killed += 1
+                    except Exception:
+                        pass
+            if killed:
+                logger.info(f"Убито {killed} orphan chrome-процессов")
+        except ImportError:
+            pass
 
 
 class DriverManager:
@@ -176,6 +275,14 @@ chrome.webRequest.onAuthRequired.addListener(
                     )
 
             self.driver = driver
+            try:
+                svc = getattr(driver, "service", None)
+                proc = getattr(svc, "process", None) if svc else None
+                if proc and proc.pid:
+                    _save_pid(proc.pid)
+                    atexit.register(self.hard_kill)
+            except Exception:
+                pass
             return driver
         except Exception as e:
             error_trace = traceback.format_exc()
@@ -226,6 +333,7 @@ chrome.webRequest.onAuthRequired.addListener(
             if pid:
                 _kill_process_tree(pid)
             self.driver = None
+            _clear_pid()
 
         if self.extension_dir and os.path.exists(self.extension_dir):
             shutil.rmtree(self.extension_dir, ignore_errors=True)
@@ -244,6 +352,7 @@ chrome.webRequest.onAuthRequired.addListener(
             except Exception as e:
                 logger.warning(f"hard_kill: {e}")
             self.driver = None
+            _clear_pid()
 
         if self.extension_dir and os.path.exists(self.extension_dir):
             shutil.rmtree(self.extension_dir, ignore_errors=True)

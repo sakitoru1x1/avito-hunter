@@ -256,13 +256,54 @@ class AvitoParser:
                 const dm = html.match(/data-marker="item-view\/item-date"[^>]*>([\s\S]*?)<\/span>/);
                 const desc_m = html.match(/data-marker="item-view\/item-description"[^>]*>([\s\S]*?)<\/div>\s*<\/div>/)
                     || html.match(/data-marker="item-view\/item-description"[^>]*>([\s\S]*?)<\/div>/);
+                const og_t = html.match(/<meta[^>]*property="og:title"[^>]*content="([^"]*)"/)
+                    || html.match(/<meta[^>]*content="([^"]*)"[^>]*property="og:title"/);
+                const og_i = html.match(/<meta[^>]*property="og:image"[^>]*content="([^"]*)"/)
+                    || html.match(/<meta[^>]*content="([^"]*)"[^>]*property="og:image"/);
+                const title_m = html.match(/data-marker="item-view\/item-title"[^>]*>([\s\S]*?)<\//);
                 const date_text = dm ? strip(dm[1]).replace(/\s+/g, ' ') : null;
                 const desc_text = desc_m ? strip(desc_m[1]) : null;
+                const title_text = (title_m ? strip(title_m[1]) : null) || (og_t ? og_t[1] : null);
+                const image_url = og_i ? og_i[1] : null;
+                const seller_link = html.match(/href="\/user\/([a-f0-9]+)/i);
+                const seller_id = seller_link ? seller_link[1] : null;
+                const sn_m = html.match(/data-marker="seller-info\/name"[^>]*>([\s\S]*?)<\//)
+                    || html.match(/class="[^"]*seller[^"]*name[^"]*"[^>]*>([\s\S]*?)<\//i);
+                const seller_name = sn_m ? strip(sn_m[1]) : null;
+                const sr_m = html.match(/data-marker="seller-info\/score[^"]*"[^>]*>([\s\S]*?)<\//)
+                    || html.match(/class="[^"]*rating[^"]*"[^>]*>([\d.,]+)/i);
+                const seller_rating = sr_m ? parseFloat(strip(sr_m[1]).replace(',', '.')) || null : null;
+                const rev_m = html.match(/(\d+)\s*отзыв/i);
+                const seller_reviews = rev_m ? parseInt(rev_m[1]) : null;
+                const reg_m = html.match(/(?:на\s+)?[Аа]вито\s+с\s+(\d{4})/i);
+                const seller_since = reg_m ? reg_m[1] : null;
+                const ads_m = html.match(/(\d+)\s*(?:объявлен|товар)/i);
+                const seller_ads = ads_m ? parseInt(ads_m[1]) : null;
+                const addr_m = html.match(/data-marker="item-view\/item-address"[^>]*>([\s\S]*?)<\/div>/);
+                const location = addr_m ? strip(addr_m[1]).replace(/\s+/g, ' ') : null;
+                const params_m = html.match(/data-marker="item-view\/item-params"[^>]*>([\s\S]*?)<\/ul>/);
+                const item_params = params_m ? strip(params_m[1]).replace(/\s+/g, ' ') : null;
+                const views_m = html.match(/(\d+)\s*просмотр/i);
+                const view_count = views_m ? parseInt(views_m[1]) : null;
+                const crumbs = [];
+                const crumb_re = /itemtype="[^"]*BreadcrumbList"[\s\S]*?<\/ol>/;
+                const bcBlock = html.match(crumb_re);
+                if (bcBlock) {
+                    const li_re = /itemprop="name"[^>]*>([\s\S]*?)<\//g;
+                    let lm;
+                    while ((lm = li_re.exec(bcBlock[0])) !== null) {
+                        const t = strip(lm[1]);
+                        if (t) crumbs.push(t);
+                    }
+                }
+                const category = crumbs.length ? crumbs.join(' > ') : null;
                 if (!date_text && !desc_text) {
                     noMatchCount++;
                     if (!sampleHtml) sampleHtml = html.substring(0, 500);
                 }
-                return [id, {date: date_text, description: desc_text}];
+                return [id, {date: date_text, description: desc_text, title: title_text, image: image_url,
+                    seller_id, seller_name, seller_rating, seller_reviews, seller_since,
+                    seller_ads, location, item_params, view_count, category}];
             } catch (e) {
                 exceptionCount++;
                 return [id, null];
@@ -526,6 +567,16 @@ class AvitoParser:
                     "search_query": search_query,
                     "is_new": False,
                     "first_seen": None,
+                    "seller_id": None,
+                    "seller_name": None,
+                    "seller_rating": None,
+                    "seller_reviews": None,
+                    "seller_since": None,
+                    "seller_ads": None,
+                    "category": None,
+                    "location": None,
+                    "item_params": None,
+                    "view_count": None,
                 })
                 self.log(f"✅ Добавлено: {title[:30]}...")
 
@@ -561,6 +612,21 @@ class AvitoParser:
                     if desc_text and len(desc_text) > 10:
                         r["description"] = desc_text
                         got_desc += 1
+                    batch_title = d.get("title")
+                    if batch_title and (not r.get("title") or r["title"] == "Н/Д"):
+                        r["title"] = batch_title
+                    batch_image = d.get("image")
+                    if batch_image and (not r.get("image_url") or r["image_url"] == "Н/Д"):
+                        r["image_url"] = batch_image
+                        s = summary_by_id.get(r["id"])
+                        if s:
+                            s["image_url"] = batch_image
+                    for field in ("seller_id", "seller_name", "seller_rating",
+                                  "seller_reviews", "seller_since", "seller_ads",
+                                  "category", "location", "item_params", "view_count"):
+                        val = d.get(field)
+                        if val is not None:
+                            r[field] = val
                 self.log(f"   ✓ дата: {got_date}/{len(id_link_pairs)}, описание: {got_desc}/{len(id_link_pairs)}")
 
         return result, page_summary

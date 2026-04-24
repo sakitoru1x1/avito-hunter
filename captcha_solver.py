@@ -122,7 +122,7 @@ class CaptchaSolver:
             logger.warning(f"Ошибка определения типа капчи: {e}")
             return {"type": "unknown"}
 
-    def _wait_captcha_resolved(self, driver, timeout=20):
+    def _wait_captcha_resolved(self, driver, timeout=120):
         """Ждёт пока страница перезагрузится после verify.
 
         Сначала ждём reload (fetch → .then → location.reload асинхронный),

@@ -90,6 +90,7 @@ class ParserOrchestrator:
             solver = CaptchaSolver(api_key, service=params.captcha_service, log_func=self.log)
             self.log("🤖 Пробую автоматическое решение капчи...")
             self.set_status("🤖 Решаю капчу автоматически...")
+            self.notifier.send_status("⚠️ Программа словила капчу. Подождите, сейчас индус её решит.")
             return solver.solve(driver)
         except Exception as e:
             self.log(f"⚠️ Ошибка авто-решения: {e}")
@@ -386,9 +387,7 @@ class ParserOrchestrator:
             user_msg = format_user_error(e, context="parser")
             self.log(user_msg)
             logger.error(f"Ошибка парсинга: {error_trace}")
-            if params.tg_notify_status:
-                self.notifier.send_status(user_msg, status_enabled=True)
-            self.notifier.send_error(error_trace)
+            self.notifier.send_error(user_msg)
             self.set_status(user_msg[:80])
 
             if should_retry(e):

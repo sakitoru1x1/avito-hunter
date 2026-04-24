@@ -23,7 +23,16 @@ CREATE TABLE IF NOT EXISTS ads (
     last_seen TEXT,
     is_active INTEGER DEFAULT 1,
     is_favorite INTEGER DEFAULT 0,
-    seller_rating REAL
+    seller_rating REAL,
+    seller_id TEXT,
+    seller_name TEXT,
+    seller_reviews INTEGER,
+    seller_since TEXT,
+    seller_ads INTEGER,
+    category TEXT,
+    location TEXT,
+    item_params TEXT,
+    view_count INTEGER
 );
 
 CREATE TABLE IF NOT EXISTS search_profiles (
@@ -77,6 +86,16 @@ def init_db():
             conn.execute("ALTER TABLE ads ADD COLUMN is_favorite INTEGER DEFAULT 0")
         if "seller_rating" not in cols:
             conn.execute("ALTER TABLE ads ADD COLUMN seller_rating REAL")
+        new_cols = {
+            "seller_id": "TEXT", "seller_name": "TEXT",
+            "seller_reviews": "INTEGER", "seller_since": "TEXT",
+            "seller_ads": "INTEGER", "category": "TEXT",
+            "location": "TEXT", "item_params": "TEXT",
+            "view_count": "INTEGER",
+        }
+        for col_name, col_type in new_cols.items():
+            if col_name not in cols:
+                conn.execute(f"ALTER TABLE ads ADD COLUMN {col_name} {col_type}")
 
 
 def _row_to_item(row):
@@ -88,6 +107,12 @@ def _row_to_item(row):
         rating = row["seller_rating"]
     except (IndexError, KeyError):
         rating = None
+    def _safe(key):
+        try:
+            return row[key]
+        except (IndexError, KeyError):
+            return None
+
     return {
         "id": row["id"],
         "title": row["title"],
@@ -103,6 +128,15 @@ def _row_to_item(row):
         "is_active": bool(row["is_active"]),
         "is_favorite": is_fav,
         "seller_rating": rating,
+        "seller_id": _safe("seller_id"),
+        "seller_name": _safe("seller_name"),
+        "seller_reviews": _safe("seller_reviews"),
+        "seller_since": _safe("seller_since"),
+        "seller_ads": _safe("seller_ads"),
+        "category": _safe("category"),
+        "location": _safe("location"),
+        "item_params": _safe("item_params"),
+        "view_count": _safe("view_count"),
         "is_new": False,
     }
 
@@ -133,8 +167,9 @@ def _upsert_ad_conn(conn, item, search_query=None):
         conn.execute(
             """INSERT INTO ads (id, title, price, link, image_url, description, date,
                                 pub_date_timestamp, search_query, first_seen, last_seen, is_active,
-                                seller_rating)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)""",
+                                seller_rating, seller_id, seller_name, seller_reviews,
+                                seller_since, seller_ads, category, location, item_params, view_count)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 item["id"], item.get("title"), item.get("price"), item.get("link"),
                 item.get("image_url"), item.get("description"), item.get("date"),
@@ -142,6 +177,9 @@ def _upsert_ad_conn(conn, item, search_query=None):
                 item.get("search_query") or search_query,
                 first_seen, now,
                 item.get("seller_rating"),
+                item.get("seller_id"), item.get("seller_name"), item.get("seller_reviews"),
+                item.get("seller_since"), item.get("seller_ads"), item.get("category"),
+                item.get("location"), item.get("item_params"), item.get("view_count"),
             ),
         )
         if item.get("price") is not None:
@@ -156,7 +194,16 @@ def _upsert_ad_conn(conn, item, search_query=None):
             """UPDATE ads SET title=?, price=?, link=?, image_url=?, description=?,
                               date=?, pub_date_timestamp=?, search_query=COALESCE(?, search_query),
                               last_seen=?, is_active=1,
-                              seller_rating=COALESCE(?, seller_rating)
+                              seller_rating=COALESCE(?, seller_rating),
+                              seller_id=COALESCE(?, seller_id),
+                              seller_name=COALESCE(?, seller_name),
+                              seller_reviews=COALESCE(?, seller_reviews),
+                              seller_since=COALESCE(?, seller_since),
+                              seller_ads=COALESCE(?, seller_ads),
+                              category=COALESCE(?, category),
+                              location=COALESCE(?, location),
+                              item_params=COALESCE(?, item_params),
+                              view_count=COALESCE(?, view_count)
                WHERE id=?""",
             (
                 item.get("title"), item.get("price"), item.get("link"),
@@ -164,6 +211,9 @@ def _upsert_ad_conn(conn, item, search_query=None):
                 item.get("pub_date_timestamp") or 0,
                 item.get("search_query") or search_query,
                 now, item.get("seller_rating"),
+                item.get("seller_id"), item.get("seller_name"), item.get("seller_reviews"),
+                item.get("seller_since"), item.get("seller_ads"), item.get("category"),
+                item.get("location"), item.get("item_params"), item.get("view_count"),
                 item["id"],
             ),
         )

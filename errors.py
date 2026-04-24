@@ -133,7 +133,7 @@ def format_user_error(exc, context=None):
             if context == "driver":
                 return "⏱ Страница не загрузилась вовремя. Проверьте интернет или попробуйте позже."
             if context == "parser":
-                return "⏱ Карточки не появились на странице. Возможно, Авито показывает капчу или блокирует."
+                return "⏱ Какая-то абракадабра с капчей, перезапускаемся"
             return "⏱ Превышено время ожидания."
         if isinstance(exc, NoSuchElementException):
             if context == "parser":
