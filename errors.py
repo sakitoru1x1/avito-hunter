@@ -112,6 +112,10 @@ def _is_session_dead(exc):
         "no such window",
         "disconnected",
         "target window already closed",
+        "max retries exceeded",
+        "newconnectionerror",
+        "connectionrefusederror",
+        "remotedisconnected",
     ))
 
 

@@ -110,25 +110,30 @@ def _kill_orphan_chrome():
     profile_marker = os.path.join(".avito-hunter", "chrome-profile")
     if sys.platform == "win32":
         try:
+            ps_cmd = (
+                "Get-CimInstance Win32_Process | "
+                "Where-Object { ($_.Name -eq 'chrome.exe' -or $_.Name -eq 'chromedriver.exe') "
+                "-and $_.CommandLine -and $_.CommandLine.Contains('.avito-hunter') } | "
+                "Select-Object -ExpandProperty ProcessId"
+            )
             result = subprocess.run(
-                ["wmic", "process", "where",
-                 "name='chrome.exe' or name='chromedriver.exe'",
-                 "get", "ProcessId,CommandLine", "/FORMAT:CSV"],
-                capture_output=True, text=True, timeout=10,
+                ["powershell", "-NoProfile", "-Command", ps_cmd],
+                capture_output=True, text=True, timeout=15,
             )
             killed = 0
-            for line in result.stdout.splitlines():
-                if profile_marker.replace("/", "\\") in line or profile_marker in line:
-                    parts = line.strip().rstrip(",").split(",")
-                    try:
-                        pid = int(parts[-1])
-                        subprocess.run(
-                            ["taskkill", "/F", "/PID", str(pid)],
-                            capture_output=True, timeout=5,
-                        )
-                        killed += 1
-                    except (ValueError, IndexError):
-                        pass
+            for line in result.stdout.strip().splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    pid = int(line)
+                    subprocess.run(
+                        ["taskkill", "/F", "/PID", str(pid)],
+                        capture_output=True, timeout=5,
+                    )
+                    killed += 1
+                except (ValueError, IndexError):
+                    pass
             if killed:
                 logger.info(f"Убито {killed} orphan chrome-процессов")
         except Exception as e:

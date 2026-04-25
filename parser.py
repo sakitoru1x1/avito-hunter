@@ -435,15 +435,6 @@ class AvitoParser:
             tuple (full_new_items, page_summary).
         """
         total = len(items)
-
-        if skip_batch:
-            image_urls = {}
-        else:
-            image_urls = self.extract_image_urls_batch(driver) if driver else {}
-            got_imgs = sum(1 for v in image_urls.values() if v)
-            if total:
-                self.log(f"🖼 Batch-извлечение URL картинок: {got_imgs}/{len(image_urls)}")
-
         page_summary = []
         cards_to_parse = []
 
@@ -457,24 +448,37 @@ class AvitoParser:
                 continue
             date_str = extract_date(item)
             timestamp = parse_date_to_timestamp(date_str)
-            img_from_batch = image_urls.get(item_id)
             page_summary.append({
                 "id": item_id,
                 "pub_date_timestamp": timestamp,
                 "search_query": search_query,
-                "image_url": img_from_batch or "Н/Д",
+                "image_url": "Н/Д",
             })
             if item_id not in known_ids:
-                cards_to_parse.append((item, item_id, date_str, timestamp, img_from_batch))
+                cards_to_parse.append((item, item_id, date_str, timestamp))
             if idx % 10 == 0 or idx == total:
                 self.log(f"   скан {idx}/{total}, новых пока: {len(cards_to_parse)}")
 
         skipped = total - len(cards_to_parse)
         self.log(f"📊 На странице: {total}, известно: {skipped}, на разбор: {len(cards_to_parse)}")
 
+        if not cards_to_parse:
+            return [], page_summary
+
+        if skip_batch:
+            image_urls = {}
+        else:
+            image_urls = self.extract_image_urls_batch(driver) if driver else {}
+            got_imgs = sum(1 for v in image_urls.values() if v)
+            self.log(f"🖼 Batch-извлечение URL картинок: {got_imgs}/{len(image_urls)}")
+            summary_by_id = {s["id"]: s for s in page_summary}
+            for sid, simg in image_urls.items():
+                if simg and sid in summary_by_id:
+                    summary_by_id[sid]["image_url"] = simg
+
         result = []
         new_total = len(cards_to_parse)
-        for idx, (item, item_id, date_str, timestamp, img_from_batch) in enumerate(cards_to_parse):
+        for idx, (item, item_id, date_str, timestamp) in enumerate(cards_to_parse):
             if stop_check():
                 self.log("⏹️ Парсинг прерван пользователем")
                 return result, page_summary
@@ -517,7 +521,7 @@ class AvitoParser:
                             filtered_ids.add(item_id)
                             continue
 
-                img_url = img_from_batch or "Н/Д"
+                img_url = image_urls.get(item_id) or "Н/Д"
 
                 description = "Н/Д"
                 for desc_selector in [
