@@ -170,19 +170,20 @@ class DriverManager:
         os.chmod(ext_dir, stat.S_IRWXU)
 
         manifest_json = """{
-    "version": "1.0.0",
-    "manifest_version": 2,
+    "version": "1.1.0",
+    "manifest_version": 3,
     "name": "Chrome Proxy",
     "permissions": [
-        "proxy", "tabs", "unlimitedStorage", "storage",
-        "<all_urls>", "webRequest", "webRequestBlocking"
+        "proxy", "storage",
+        "webRequest", "webRequestAuthProvider"
     ],
-    "background": { "scripts": ["background.js"] },
-    "minimum_chrome_version": "22.0.0"
+    "host_permissions": ["<all_urls>"],
+    "background": { "service_worker": "background.js" },
+    "minimum_chrome_version": "108.0"
 }"""
 
         background_js = f"""
-var config = {{
+const config = {{
     mode: "fixed_servers",
     rules: {{
         singleProxy: {{
@@ -194,21 +195,17 @@ var config = {{
     }}
 }};
 
-chrome.proxy.settings.set({{value: config, scope: "regular"}}, function() {{}});
+chrome.proxy.settings.set({{value: config, scope: "regular"}});
 
-function callbackFn(details) {{
-    return {{
+chrome.webRequest.onAuthRequired.addListener(
+    (details) => ({{
         authCredentials: {{
             username: "{proxy_user}",
             password: "{proxy_pass}"
         }}
-    }};
-}}
-
-chrome.webRequest.onAuthRequired.addListener(
-    callbackFn,
+    }}),
     {{urls: ["<all_urls>"]}},
-    ['blocking']
+    ["blocking"]
 );
 """
 
